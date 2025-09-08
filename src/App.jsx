@@ -43,8 +43,17 @@ function App() {
   // Detect shared prompt via URL (?share=...)
   useEffect(() => {
     try {
-      const params = new URLSearchParams(window.location.search)
-      const share = params.get('share')
+      // Prefer hash (#share=...), fallback to query (?share=...)
+      const getShare = () => {
+        if (window.location.hash && window.location.hash.startsWith('#')) {
+          const hp = new URLSearchParams(window.location.hash.slice(1))
+          const hv = hp.get('share')
+          if (hv) return hv
+        }
+        const qp = new URLSearchParams(window.location.search)
+        return qp.get('share')
+      }
+      const share = getShare()
       if (!share) return
       const decoded = decodeShared(share)
       if (
@@ -193,7 +202,7 @@ function App() {
       tools: selectedPrompt.tools || [],
     }
     const b64 = encodeShared(payload)
-    const url = `${window.location.origin}${window.location.pathname}?share=${encodeURIComponent(b64)}`
+    const url = `${window.location.origin}${window.location.pathname}#share=${encodeURIComponent(b64)}`
     try {
       await navigator.clipboard.writeText(url)
       setCopyNotice('Prompt link copied')
@@ -212,7 +221,7 @@ function App() {
       run: { transcript: runMessages || [] },
     }
     const b64 = encodeShared(payload)
-    const url = `${window.location.origin}${window.location.pathname}?share=${encodeURIComponent(b64)}`
+    const url = `${window.location.origin}${window.location.pathname}#share=${encodeURIComponent(b64)}`
     try {
       await navigator.clipboard.writeText(url)
       setCopyNotice('Run link copied')
@@ -240,6 +249,11 @@ function App() {
     try {
       const url = new URL(window.location.href)
       url.searchParams.delete('share')
+      if (url.hash.includes('share=')) {
+        const hp = new URLSearchParams(url.hash.slice(1))
+        hp.delete('share')
+        url.hash = hp.toString() ? `#${hp.toString()}` : ''
+      }
       window.history.replaceState({}, '', url.toString())
     } catch {}
   }
