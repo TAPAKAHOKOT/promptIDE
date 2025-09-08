@@ -1,7 +1,7 @@
 # Multi-stage build: build React/Vite app, then serve via Nginx
 
 # 1) Builder
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci --no-audit --no-fund

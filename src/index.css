@@ -149,6 +149,26 @@ textarea {
   background-size: 200% 100%;
   animation: shimmer 1.2s ease-in-out infinite;
 }
+/* Confirm modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal-panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 16px;
+  width: min(520px, 92vw);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+}
+.modal-title { font-weight: 700; margin: 0 0 8px 0; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 
 @keyframes shimmer {
   0% { background-position: 200% 0; }

@@ -121,7 +121,11 @@ function App() {
     setSelectedId(copy.id)
   }
 
-  function deletePrompt(id) {
+  async function deletePrompt(id) {
+    const prompt = prompts.find(p => p.id === id)
+    const title = prompt?.title || 'Untitled'
+    const ok = await showConfirm({ title: 'Удаление промпта', message: `Удалить промпт "${title}"? Это действие необратимо.`, confirmText: 'Удалить' })
+    if (!ok) return
     setPrompts(prev => prev.filter(p => p.id !== id))
     if (selectedId === id) setSelectedId(null)
   }
@@ -143,7 +147,9 @@ function App() {
     }))
   }
 
-  function removeMessage(id) {
+  async function removeMessage(id) {
+    const ok = await showConfirm({ title: 'Удаление сообщения', message: 'Удалить сообщение?', confirmText: 'Удалить' })
+    if (!ok) return
     updateSelected(p => ({ ...p, messages: p.messages.filter(m => m.id !== id) }))
   }
 
@@ -160,7 +166,9 @@ function App() {
     })
   }
 
-  function removeTool(index) {
+  async function removeTool(index) {
+    const ok = await showConfirm({ title: 'Удаление tool', message: 'Удалить tool?', confirmText: 'Удалить' })
+    if (!ok) return
     updateSelected(p => {
       const tools = [...(p.tools || [])]
       tools.splice(index, 1)
@@ -324,7 +332,9 @@ function App() {
     })
   }
 
-  function removeParam(index, fieldIndex) {
+  async function removeParam(index, fieldIndex) {
+    const ok = await showConfirm({ title: 'Удаление параметра', message: 'Удалить параметр?', confirmText: 'Удалить' })
+    if (!ok) return
     updateSelected(p => {
       const tools = [...(p.tools || [])]
       const t = { ...(tools[index] || {}) }
@@ -342,15 +352,27 @@ function App() {
   const [isRunning, setIsRunning] = useState(false)
   const [runError, setRunError] = useState('')
   const [previewByMessageId, setPreviewByMessageId] = useState({})
+  const [confirmData, setConfirmData] = useState(null) // {title, message, confirmText, cancelText, resolve}
+
+  function showConfirm(options) {
+    const defaults = { title: 'Подтверждение', message: '', confirmText: 'Удалить', cancelText: 'Отмена' }
+    return new Promise(resolve => {
+      setConfirmData({ ...defaults, ...options, resolve })
+    })
+  }
+
+  function resolveConfirm(result) {
+    try { confirmData?.resolve?.(result) } finally { setConfirmData(null) }
+  }
 
   useEffect(() => {
     if (selectedPrompt) {
-      // try load run history for this prompt
+      // load saved assistant-only transcript for this prompt; default to empty
       try {
         const saved = JSON.parse(localStorage.getItem(`run_messages_${selectedPrompt.id}`) || 'null')
-        setRunMessages(Array.isArray(saved) ? saved : (selectedPrompt.messages || []))
+        setRunMessages(Array.isArray(saved) ? saved : [])
       } catch {
-        setRunMessages(selectedPrompt.messages || [])
+        setRunMessages([])
       }
       try {
         const inputSaved = localStorage.getItem(`chat_input_${selectedPrompt.id}`) || ''
@@ -414,7 +436,9 @@ function App() {
       const tools = mapToolsForOpenAI(selectedPrompt)
       const payload = {
         model: model || 'gpt-4o-mini',
-        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        messages: messages
+          .filter(m => m.role !== 'comment')
+          .map(m => ({ role: m.role, content: m.content })),
         temperature: 0.7,
       }
       if (tools) {
@@ -456,7 +480,8 @@ function App() {
     setIsRunning(true)
     try {
       const base = selectedPrompt.messages || []
-      setRunMessages(base)
+      // show only model replies in the chat
+      setRunMessages([])
       const loadingId = crypto.randomUUID()
       setRunMessages(prev => [...prev, { id: loadingId, role: 'assistant', content: '', loading: true }])
       const assistant = await callOpenAI(base)
@@ -471,13 +496,14 @@ function App() {
     if (!selectedPrompt) return
     if (!chatInput.trim()) return
     const userMsg = { id: crypto.randomUUID(), role: 'user', content: chatInput.trim() }
-    const next = [...runMessages, userMsg]
-    setRunMessages(next)
+    const base = selectedPrompt.messages || []
+    const next = [...base, userMsg]
     setChatInput('')
     setIsRunning(true)
     try {
       const loadingId = crypto.randomUUID()
-      setRunMessages(prev => [...prev, { id: loadingId, role: 'assistant', content: '', loading: true }])
+      // replace chat with only assistant loading placeholder
+      setRunMessages([{ id: loadingId, role: 'assistant', content: '', loading: true }])
       const assistant = await callOpenAI([...next])
       setRunMessages(prev => prev.filter(m => m.id !== loadingId))
       if (assistant) setRunMessages(prev => [...prev, assistant])
@@ -687,6 +713,7 @@ function App() {
                           <option value="system">system</option>
                           <option value="user">user</option>
                           <option value="assistant">assistant</option>
+                          <option value="comment">comment</option>
                         </select>
                       </span>
                       <button className="btn ghost" onClick={() => setPreviewByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
@@ -713,6 +740,7 @@ function App() {
                 <button className="btn ghost" onClick={() => addMessage('system')}>+ system</button>
                 <button className="btn ghost" onClick={() => addMessage('user')}>+ user</button>
                 <button className="btn ghost" onClick={() => addMessage('assistant')}>+ assistant</button>
+                <button className="btn ghost" onClick={() => addMessage('comment')}>+ comment</button>
               </div>
             </section>
 
@@ -790,7 +818,7 @@ function App() {
                 <div style={{ whiteSpace: 'pre-wrap', color: '#f88', border: '1px solid #633', padding: 8, borderRadius: 6, marginBottom: 8 }}>{runError}</div>
               )}
               <div className="panel scrolly" style={{ maxHeight: 280, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {runMessages.length === 0 && <div style={{ color: '#888' }}>Нет сообщений. Добавьте сообщения или нажмите Run once.</div>}
+                {runMessages.length === 0 && <div style={{ color: '#888' }}>Нажмите Run once, чтобы получить ответ модели.</div>}
                 {runMessages.map((m, idx) => (
                   <div key={m.id || idx} style={{ textAlign: 'left' }}>
                     <div style={{ fontWeight: 600 }}>{m.role}</div>
@@ -821,20 +849,23 @@ function App() {
                   </div>
                 ))}
               </div>
-              <div className="row" style={{ marginTop: 8 }}>
-                <input
-                  placeholder="Type a message"
-                  value={chatInput}
-                  onChange={e => setChatInput(e.target.value)}
-                  style={{ flex: 1 }}
-                />
-                <button className="btn primary" onClick={sendUserMessage} disabled={isRunning || !chatInput.trim()}>Send</button>
-              </div>
             </section>
           </div>
         )}
       </main>
-      </div>
+      {confirmData && (
+        <div className="modal-backdrop" onClick={() => resolveConfirm(false)}>
+          <div className="modal-panel" onClick={e => e.stopPropagation()}>
+            <div className="modal-title">{confirmData.title}</div>
+            {confirmData.message && <div style={{ color: 'var(--muted)' }}>{confirmData.message}</div>}
+            <div className="modal-actions">
+              <button className="btn ghost" onClick={() => resolveConfirm(false)}>{confirmData.cancelText || 'Отмена'}</button>
+              <button className="btn danger" onClick={() => resolveConfirm(true)}>{confirmData.confirmText || 'Удалить'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
