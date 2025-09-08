@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import './App.css'
 
 function newPrompt(overrides = {}) {
@@ -16,6 +18,8 @@ function App() {
   const [prompts, setPrompts] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [isLoaded, setIsLoaded] = useState(false)
+  const [sharedPreview, setSharedPreview] = useState(null)
+  const [copyNotice, setCopyNotice] = useState('')
 
   // load from localStorage once
   useEffect(() => {
@@ -30,6 +34,26 @@ function App() {
       console.error('Failed to load state', e)
     } finally {
       setIsLoaded(true)
+    }
+  }, [])
+
+  // Detect shared prompt via URL (?share=...)
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const share = params.get('share')
+      if (!share) return
+      const decoded = decodeShared(share)
+      if (
+        decoded && (
+          (decoded.kind === 'run' && decoded.run && Array.isArray(decoded.run.transcript)) ||
+          Array.isArray(decoded.messages)
+        )
+      ) {
+        setSharedPreview(decoded)
+      }
+    } catch (e) {
+      console.error('Failed to parse shared prompt', e)
     }
   }, [])
 
@@ -125,6 +149,91 @@ function App() {
     })
   }
 
+  // --- Export / Import helpers ---
+  function encodeShared(obj) {
+    try {
+      const json = JSON.stringify(obj)
+      const bytes = new TextEncoder().encode(json)
+      let binary = ''
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+      return btoa(binary)
+    } catch {
+      return ''
+    }
+  }
+
+  function decodeShared(b64) {
+    try {
+      const binary = atob(b64)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+      const json = new TextDecoder().decode(bytes)
+      return JSON.parse(json)
+    } catch {
+      return null
+    }
+  }
+
+  async function copyPromptLink() {
+    if (!selectedPrompt) return
+    const payload = {
+      kind: 'prompt',
+      title: selectedPrompt.title,
+      messages: selectedPrompt.messages,
+      tools: selectedPrompt.tools || [],
+    }
+    const b64 = encodeShared(payload)
+    const url = `${window.location.origin}${window.location.pathname}?share=${encodeURIComponent(b64)}`
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopyNotice('Prompt link copied')
+      setTimeout(() => setCopyNotice(''), 1500)
+    } catch {
+      setCopyNotice('Copy failed')
+      setTimeout(() => setCopyNotice(''), 1500)
+    }
+  }
+
+  async function copyRunLink() {
+    if (!selectedPrompt) return
+    const payload = {
+      kind: 'run',
+      title: selectedPrompt.title,
+      run: { transcript: runMessages || [] },
+    }
+    const b64 = encodeShared(payload)
+    const url = `${window.location.origin}${window.location.pathname}?share=${encodeURIComponent(b64)}`
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopyNotice('Run link copied')
+      setTimeout(() => setCopyNotice(''), 1500)
+    } catch {
+      setCopyNotice('Copy failed')
+      setTimeout(() => setCopyNotice(''), 1500)
+    }
+  }
+
+  function importSharedToMyPrompts() {
+    if (!sharedPreview) return
+    const created = newPrompt({
+      title: sharedPreview.title || 'Imported Prompt',
+      messages: Array.isArray(sharedPreview.messages) ? sharedPreview.messages.map(m => ({ ...m, id: crypto.randomUUID() })) : [],
+      tools: Array.isArray(sharedPreview.tools) ? sharedPreview.tools : [],
+    })
+    setPrompts(prev => [created, ...prev])
+    setSelectedId(created.id)
+    clearSharePreview()
+  }
+
+  function clearSharePreview() {
+    setSharedPreview(null)
+    try {
+      const url = new URL(window.location.href)
+      url.searchParams.delete('share')
+      window.history.replaceState({}, '', url.toString())
+    } catch {}
+  }
+
   // --- Tool parameters editor helpers ---
   function parseParamsToFields(paramsString) {
     try {
@@ -208,6 +317,7 @@ function App() {
   const [chatInput, setChatInput] = useState('')
   const [isRunning, setIsRunning] = useState(false)
   const [runError, setRunError] = useState('')
+  const [previewByMessageId, setPreviewByMessageId] = useState({})
 
   useEffect(() => {
     if (selectedPrompt) {
@@ -353,11 +463,90 @@ function App() {
     updateSelected(p => ({ ...p, messages: [...p.messages, { id: crypto.randomUUID(), role: 'assistant', content: msg.content }] }))
   }
 
+  // Read-only view for shared links
+  if (sharedPreview) {
+    return (
+      <div style={{ height: '100vh', padding: 16 }} className="scrolly">
+        <div className="panel" style={{ maxWidth: 960, margin: '0 auto' }}>
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <h2 style={{ margin: 0 }}>Shared Prompt</h2>
+            <button className="btn ghost" onClick={() => navigator.clipboard.writeText(window.location.href)}>Copy link</button>
+          </div>
+          <div className="col" style={{ marginTop: 12 }}>
+            <div className="panel" style={{ borderColor: '#555' }}>
+              <strong>Title</strong>
+              <div style={{ marginTop: 6 }}>{sharedPreview.title || 'Untitled'}</div>
+            </div>
+            {sharedPreview.kind !== 'run' && (
+              <div className="panel" style={{ borderColor: '#555' }}>
+                <strong>Messages</strong>
+                <div className="col" style={{ marginTop: 8 }}>
+                  {(sharedPreview.messages || []).map((m, i) => (
+                    <div key={i} className="panel" style={{ borderColor: '#555' }}>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>{m.role}</div>
+                      <div>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {sharedPreview.kind !== 'prompt' && sharedPreview.run?.transcript && (
+              <div className="panel" style={{ borderColor: '#555' }}>
+                <strong>Last run transcript</strong>
+                <div className="col" style={{ marginTop: 8 }}>
+                  {sharedPreview.run.transcript.map((m, i) => (
+                    <div key={i} className="panel" style={{ borderColor: '#555' }}>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>{m.role}</div>
+                      {m.content && <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>}
+                      {Array.isArray(m.tool_calls) && m.tool_calls.length > 0 && (
+                        <div style={{ marginTop: 6 }}>
+                          <div style={{ fontWeight: 600 }}>Tool calls:</div>
+                          <div className="col" style={{ gap: 6 }}>
+                            {m.tool_calls.map((tc, j) => (
+                              <div key={j} className="panel" style={{ borderStyle: 'dashed', borderColor: '#666' }}>
+                                <div><strong>name:</strong> {tc?.function?.name || 'unknown'}</div>
+                                <div><strong>arguments:</strong></div>
+                                <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{tc?.function?.arguments || ''}</pre>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {sharedPreview.kind !== 'run' && (
+              <div className="panel" style={{ borderColor: '#555' }}>
+                <strong>Tools</strong>
+                <div className="col" style={{ marginTop: 8 }}>
+                  {(sharedPreview.tools || []).map((t, i) => (
+                    <div key={i} className="panel" style={{ borderColor: '#555' }}>
+                      <div style={{ fontWeight: 600 }}>{t.name}</div>
+                      {t.description && <div style={{ color: 'var(--muted)', marginTop: 4 }}>{t.description}</div>}
+                      <details style={{ marginTop: 8 }}>
+                        <summary>parameters</summary>
+                        <pre style={{ whiteSpace: 'pre-wrap' }}>{typeof t.parameters === 'string' ? t.parameters : JSON.stringify(t.parameters || {}, null, 2)}</pre>
+                      </details>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', height: '100vh' }}>
-      <aside style={{ borderRight: '1px solid #333', padding: '12px', overflow: 'auto' }}>
+      <aside style={{ borderRight: '1px solid #333', padding: '12px', overflow: 'auto' }} className="scrolly">
         <h2 style={{ marginTop: 0 }}>Prompt IDE</h2>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="row">
           <input
             type="password"
             placeholder="OpenAI API Key"
@@ -366,97 +555,139 @@ function App() {
             style={{ flex: 1 }}
           />
         </div>
-        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-          <button onClick={addPrompt}>New Prompt</button>
+        <div style={{ marginTop: 12 }} className="row">
+          <button className="btn primary" onClick={addPrompt}>New Prompt</button>
         </div>
-        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ marginTop: 12, gap: 6 }} className="col">
           {prompts.map(p => (
-            <div key={p.id} style={{ border: '1px solid #444', borderRadius: 6, padding: 8, background: selectedId === p.id ? '#2a2a2a' : 'transparent' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                <button onClick={() => setSelectedId(p.id)} style={{ flex: 1, textAlign: 'left' }}>{p.title || 'Untitled'}</button>
-                <button onClick={() => duplicatePrompt(p.id)}>⎘</button>
-                <button onClick={() => deletePrompt(p.id)}>✕</button>
+            <div key={p.id} className="panel" style={{ background: selectedId === p.id ? '#2a2a2a' : 'transparent' }}>
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <button className="btn ghost" onClick={() => setSelectedId(p.id)} style={{ flex: 1, textAlign: 'left' }}>{p.title || 'Untitled'}</button>
+                <button className="btn ghost" onClick={() => duplicatePrompt(p.id)}>⎘</button>
+                <button className="btn danger" onClick={() => deletePrompt(p.id)}>✕</button>
               </div>
             </div>
           ))}
         </div>
       </aside>
-      <main style={{ padding: '16px', overflow: 'auto' }}>
+      <main style={{ padding: '16px', overflow: 'auto' }} className="scrolly">
         {!selectedPrompt ? (
-          <div>Select or create a prompt</div>
+          <div>
+            {sharedPreview ? (
+              <div className="panel">
+                <div className="row" style={{ marginBottom: 8 }}>
+                  <strong>Shared Prompt Preview</strong>
+                </div>
+                <div className="col">
+                  <input value={sharedPreview.title || ''} readOnly />
+                  <div className="panel" style={{ borderColor: '#555' }}>
+                    <strong>Messages</strong>
+                    <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(sharedPreview.messages || [], null, 2)}</pre>
+                  </div>
+                  <div className="panel" style={{ borderColor: '#555' }}>
+                    <strong>Tools</strong>
+                    <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(sharedPreview.tools || [], null, 2)}</pre>
+                  </div>
+                </div>
+                <div className="row" style={{ marginTop: 8 }}>
+                  <button className="btn primary" onClick={importSharedToMyPrompts}>Import to my prompts</button>
+                  <button className="btn ghost" onClick={clearSharePreview}>Close preview</button>
+                </div>
+              </div>
+            ) : (
+              <div>Select or create a prompt</div>
+            )}
+          </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateRows: 'auto auto 1fr', gap: 12, height: '100%' }}>
-            <input
-              value={selectedPrompt.title}
-              onChange={e => updateSelected(p => ({ ...p, title: e.target.value }))}
-              placeholder="Prompt title"
-            />
+            <div className="row">
+              <input
+                value={selectedPrompt.title}
+                onChange={e => updateSelected(p => ({ ...p, title: e.target.value }))}
+                placeholder="Prompt title"
+                style={{ flex: 1 }}
+              />
+              <button className="btn ghost" onClick={copyPromptLink}>Copy prompt link</button>
+              <button className="btn ghost" onClick={copyRunLink}>Copy run link</button>
+              {copyNotice && <span style={{ color: 'var(--muted)' }}>{copyNotice}</span>}
+            </div>
 
             <section>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+              <div className="row" style={{ marginBottom: 8 }}>
                 <strong>Messages</strong>
-                <button onClick={() => addMessage('system')}>+ system</button>
-                <button onClick={() => addMessage('user')}>+ user</button>
-                <button onClick={() => addMessage('assistant')}>+ assistant</button>
-                <button onClick={() => addMessage('tool')}>+ tool</button>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <button className="btn ghost" onClick={() => addMessage('system')}>+ system</button>
+                <button className="btn ghost" onClick={() => addMessage('user')}>+ user</button>
+                <button className="btn ghost" onClick={() => addMessage('assistant')}>+ assistant</button>
+      </div>
+              <div className="col">
                 {selectedPrompt.messages.map(m => (
-                  <div key={m.id} style={{ border: '1px solid #444', borderRadius: 6, padding: 8 }}>
-                    <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-                      <select value={m.role} onChange={e => updateMessage(m.id, { role: e.target.value })}>
-                        <option value="system">system</option>
-                        <option value="user">user</option>
-                        <option value="assistant">assistant</option>
-                        <option value="tool">tool</option>
-                      </select>
-                      <button onClick={() => removeMessage(m.id)}>Delete</button>
+                  <div key={m.id} className="panel">
+                    <div className="row" style={{ marginBottom: 6 }}>
+                      <span className="select">
+                        <select value={m.role} onChange={e => updateMessage(m.id, { role: e.target.value })}>
+                          <option value="system">system</option>
+                          <option value="user">user</option>
+                          <option value="assistant">assistant</option>
+                          <option value="tool">tool</option>
+                        </select>
+                      </span>
+                      <button className="btn ghost" onClick={() => setPreviewByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
+                        {previewByMessageId[m.id] ? 'Edit' : 'Preview'}
+        </button>
+                      <button className="btn danger" onClick={() => removeMessage(m.id)}>Delete</button>
                     </div>
-                    <textarea
-                      value={m.content}
-                      onChange={e => updateMessage(m.id, { content: e.target.value })}
-                      rows={4}
-                      style={{ width: '100%' }}
-                      placeholder="Message content"
-                    />
+                    {previewByMessageId[m.id] ? (
+                      <div className="panel" style={{ borderColor: '#555' }}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
+                      </div>
+                    ) : (
+                      <textarea
+                        value={m.content}
+                        onChange={e => updateMessage(m.id, { content: e.target.value })}
+                        rows={8}
+                        placeholder="Message content (Markdown supported)"
+                      />
+                    )}
                   </div>
                 ))}
               </div>
             </section>
 
             <section>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12, marginBottom: 8 }}>
+              <div className="row" style={{ marginTop: 12, marginBottom: 8 }}>
                 <strong>Tools</strong>
-                <button onClick={addTool}>+ tool</button>
+                <button className="btn ghost" onClick={addTool}>+ tool</button>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div className="col">
                 {(selectedPrompt.tools || []).map((t, i) => (
-                  <div key={i} style={{ border: '1px solid #444', borderRadius: 6, padding: 8 }}>
-                    <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                  <div key={i} className="panel">
+                    <div className="row" style={{ marginBottom: 6 }}>
                       <input value={t.name} onChange={e => updateTool(i, { name: e.target.value })} placeholder="Tool name" />
-                      <button onClick={() => removeTool(i)}>Delete</button>
+                      <button className="btn danger" onClick={() => removeTool(i)}>Delete</button>
                     </div>
                     <input value={t.description} onChange={e => updateTool(i, { description: e.target.value })} placeholder="Description" />
                     <div style={{ marginTop: 8, borderTop: '1px dashed #555', paddingTop: 8 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <div className="row" style={{ marginBottom: 6 }}>
                         <strong>Parameters</strong>
-                        <button onClick={() => addParam(i)}>+ parameter</button>
+                        <button className="btn ghost" onClick={() => addParam(i)}>+ parameter</button>
                       </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div className="col">
                         {parseParamsToFields(t.parameters || '').map((f, fi) => (
-                          <div key={fi} style={{ border: '1px solid #555', borderRadius: 6, padding: 8 }}>
+                          <div key={fi} className="panel" style={{ borderColor: '#555' }}>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 100px 80px', gap: 8, alignItems: 'center' }}>
                               <input
                                 value={f.key}
                                 onChange={e => updateParam(i, fi, { key: e.target.value })}
                                 placeholder="name"
                               />
-                              <select value={f.type} onChange={e => updateParam(i, fi, { type: e.target.value })}>
-                                <option value="string">string</option>
-                                <option value="number">number</option>
-                                <option value="integer">integer</option>
-                                <option value="boolean">boolean</option>
-                              </select>
+                              <span className="select">
+                                <select value={f.type} onChange={e => updateParam(i, fi, { type: e.target.value })}>
+                                  <option value="string">string</option>
+                                  <option value="number">number</option>
+                                  <option value="integer">integer</option>
+                                  <option value="boolean">boolean</option>
+                                </select>
+                              </span>
                               <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                 <input
                                   type="checkbox"
@@ -465,7 +696,7 @@ function App() {
                                 />
                                 required
                               </label>
-                              <button onClick={() => removeParam(i, fi)}>Delete</button>
+                              <button className="btn danger" onClick={() => removeParam(i, fi)}>Delete</button>
                             </div>
                             <input
                               value={f.description}
@@ -487,15 +718,15 @@ function App() {
             </section>
 
             <section style={{ marginTop: 12 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+              <div className="row" style={{ marginBottom: 8 }}>
                 <strong>Chat</strong>
-                <button onClick={runOnce} disabled={isRunning}>Run once</button>
+                <button className="btn primary" onClick={runOnce} disabled={isRunning}>Run once</button>
                 {isRunning && <span>Running...</span>}
               </div>
               {runError && (
                 <div style={{ whiteSpace: 'pre-wrap', color: '#f88', border: '1px solid #633', padding: 8, borderRadius: 6, marginBottom: 8 }}>{runError}</div>
               )}
-              <div style={{ border: '1px solid #444', borderRadius: 6, padding: 8, maxHeight: 280, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div className="panel scrolly" style={{ maxHeight: 280, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {runMessages.length === 0 && <div style={{ color: '#888' }}>Нет сообщений. Добавьте сообщения или нажмите Run once.</div>}
                 {runMessages.map((m, idx) => (
                   <div key={m.id || idx} style={{ textAlign: 'left' }}>
@@ -504,9 +735,9 @@ function App() {
                     {Array.isArray(m.tool_calls) && m.tool_calls.length > 0 && (
                       <div style={{ marginTop: 6 }}>
                         <div style={{ fontWeight: 600 }}>Tool calls:</div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <div className="col" style={{ gap: 6 }}>
                           {m.tool_calls.map((tc, i) => (
-                            <div key={i} style={{ border: '1px dashed #666', borderRadius: 6, padding: 6 }}>
+                            <div key={i} className="panel" style={{ borderStyle: 'dashed', borderColor: '#666' }}>
                               <div><strong>name:</strong> {tc?.function?.name || 'unknown'}</div>
                               <div><strong>arguments:</strong></div>
                               <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{tc?.function?.arguments || ''}</pre>
@@ -523,20 +754,20 @@ function App() {
                   </div>
                 ))}
               </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <div className="row" style={{ marginTop: 8 }}>
                 <input
                   placeholder="Type a message"
                   value={chatInput}
                   onChange={e => setChatInput(e.target.value)}
                   style={{ flex: 1 }}
                 />
-                <button onClick={sendUserMessage} disabled={isRunning || !chatInput.trim()}>Send</button>
+                <button className="btn primary" onClick={sendUserMessage} disabled={isRunning || !chatInput.trim()}>Send</button>
               </div>
             </section>
           </div>
         )}
       </main>
-    </div>
+      </div>
   )
 }
 
