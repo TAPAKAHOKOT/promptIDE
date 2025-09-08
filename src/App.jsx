@@ -20,6 +20,7 @@ function App() {
   const [isLoaded, setIsLoaded] = useState(false)
   const [sharedPreview, setSharedPreview] = useState(null)
   const [copyNotice, setCopyNotice] = useState('')
+  const [model, setModel] = useState('gpt-4o-mini')
 
   // load from localStorage once
   useEffect(() => {
@@ -27,9 +28,11 @@ function App() {
       const savedKey = localStorage.getItem('openai_api_key') || ''
       const savedPrompts = JSON.parse(localStorage.getItem('prompts') || '[]')
       const savedSelected = localStorage.getItem('selected_prompt_id')
+      const savedModel = localStorage.getItem('openai_model') || 'gpt-4o-mini'
       setApiKey(savedKey)
       if (Array.isArray(savedPrompts)) setPrompts(savedPrompts)
       if (savedSelected) setSelectedId(savedSelected)
+      setModel(savedModel)
     } catch (e) {
       console.error('Failed to load state', e)
     } finally {
@@ -78,6 +81,13 @@ function App() {
       if (selectedId) localStorage.setItem('selected_prompt_id', selectedId)
     } catch {}
   }, [selectedId, isLoaded])
+
+  useEffect(() => {
+    if (!isLoaded) return
+    try {
+      localStorage.setItem('openai_model', model)
+    } catch {}
+  }, [model, isLoaded])
 
   const selectedPrompt = useMemo(
     () => prompts.find(p => p.id === selectedId) || null,
@@ -389,7 +399,7 @@ function App() {
     try {
       const tools = mapToolsForOpenAI(selectedPrompt)
       const payload = {
-        model: 'gpt-4o-mini',
+        model: model || 'gpt-4o-mini',
         messages: messages.map(m => ({ role: m.role, content: m.content })),
         temperature: 0.7,
       }
@@ -433,7 +443,10 @@ function App() {
     try {
       const base = selectedPrompt.messages || []
       setRunMessages(base)
+      const loadingId = crypto.randomUUID()
+      setRunMessages(prev => [...prev, { id: loadingId, role: 'assistant', content: '', loading: true }])
       const assistant = await callOpenAI(base)
+      setRunMessages(prev => prev.filter(m => m.id !== loadingId))
       if (assistant) setRunMessages(prev => [...prev, assistant])
     } finally {
       setIsRunning(false)
@@ -449,7 +462,10 @@ function App() {
     setChatInput('')
     setIsRunning(true)
     try {
-      const assistant = await callOpenAI(next)
+      const loadingId = crypto.randomUUID()
+      setRunMessages(prev => [...prev, { id: loadingId, role: 'assistant', content: '', loading: true }])
+      const assistant = await callOpenAI([...next])
+      setRunMessages(prev => prev.filter(m => m.id !== loadingId))
       if (assistant) setRunMessages(prev => [...prev, assistant])
     } finally {
       setIsRunning(false)
@@ -460,7 +476,21 @@ function App() {
     if (!selectedPrompt) return
     const msg = runMessages[indexInRun]
     if (!msg || msg.role !== 'assistant') return
-    updateSelected(p => ({ ...p, messages: [...p.messages, { id: crypto.randomUUID(), role: 'assistant', content: msg.content }] }))
+    let contentToSave = (msg.content || '').trim()
+    if (!contentToSave && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      try {
+        const parts = msg.tool_calls.map(tc => {
+          const name = tc?.function?.name || 'unknown'
+          const args = tc?.function?.arguments || ''
+          return `Tool call: ${name}\narguments:\n${args}`
+        })
+        contentToSave = parts.join('\n\n')
+      } catch {
+        contentToSave = 'Tool call (details unavailable)'
+      }
+    }
+    if (!contentToSave) return
+    updateSelected(p => ({ ...p, messages: [...p.messages, { id: crypto.randomUUID(), role: 'assistant', content: contentToSave }] }))
   }
 
   // Read-only view for shared links
@@ -561,10 +591,17 @@ function App() {
         <div style={{ marginTop: 12, gap: 6 }} className="col">
           {prompts.map(p => (
             <div key={p.id} className="panel" style={{ background: selectedId === p.id ? '#2a2a2a' : 'transparent' }}>
-              <div className="row" style={{ justifyContent: 'space-between' }}>
-                <button className="btn ghost" onClick={() => setSelectedId(p.id)} style={{ flex: 1, textAlign: 'left' }}>{p.title || 'Untitled'}</button>
-                <button className="btn ghost" onClick={() => duplicatePrompt(p.id)}>⎘</button>
-                <button className="btn danger" onClick={() => deletePrompt(p.id)}>✕</button>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 8, alignItems: 'center' }}>
+                <button
+                  className="btn ghost"
+                  onClick={() => setSelectedId(p.id)}
+                  style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  title={p.title || 'Untitled'}
+                >
+                  {p.title || 'Untitled'}
+                </button>
+                <button className="btn ghost" onClick={() => duplicatePrompt(p.id)} title="Duplicate">⎘</button>
+                <button className="btn danger" onClick={() => deletePrompt(p.id)} title="Delete">✕</button>
               </div>
             </div>
           ))}
@@ -572,7 +609,7 @@ function App() {
       </aside>
       <main style={{ padding: '16px', overflow: 'auto' }} className="scrolly">
         {!selectedPrompt ? (
-          <div>
+      <div>
             {sharedPreview ? (
               <div className="panel">
                 <div className="row" style={{ marginBottom: 8 }}>
@@ -607,6 +644,17 @@ function App() {
                 placeholder="Prompt title"
                 style={{ flex: 1 }}
               />
+              <span className="select">
+                <select value={model} onChange={e => setModel(e.target.value)}>
+                  <option value="gpt-4o-mini">gpt-4o-mini</option>
+                  <option value="gpt-4o">gpt-4o</option>
+                  <option value="o4-mini">o4-mini</option>
+                  <option value="o3-mini">o3-mini</option>
+                  <option value="gpt-4.1">gpt-4.1</option>
+                  <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+                  <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+                </select>
+              </span>
               <button className="btn ghost" onClick={copyPromptLink}>Copy prompt link</button>
               <button className="btn ghost" onClick={copyRunLink}>Copy run link</button>
               {copyNotice && <span style={{ color: 'var(--muted)' }}>{copyNotice}</span>}
@@ -615,9 +663,6 @@ function App() {
             <section>
               <div className="row" style={{ marginBottom: 8 }}>
                 <strong>Messages</strong>
-                <button className="btn ghost" onClick={() => addMessage('system')}>+ system</button>
-                <button className="btn ghost" onClick={() => addMessage('user')}>+ user</button>
-                <button className="btn ghost" onClick={() => addMessage('assistant')}>+ assistant</button>
       </div>
               <div className="col">
                 {selectedPrompt.messages.map(m => (
@@ -628,7 +673,6 @@ function App() {
                           <option value="system">system</option>
                           <option value="user">user</option>
                           <option value="assistant">assistant</option>
-                          <option value="tool">tool</option>
                         </select>
                       </span>
                       <button className="btn ghost" onClick={() => setPreviewByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
@@ -650,6 +694,11 @@ function App() {
                     )}
                   </div>
                 ))}
+              </div>
+              <div className="row" style={{ marginTop: 8 }}>
+                <button className="btn ghost" onClick={() => addMessage('system')}>+ system</button>
+                <button className="btn ghost" onClick={() => addMessage('user')}>+ user</button>
+                <button className="btn ghost" onClick={() => addMessage('assistant')}>+ assistant</button>
               </div>
             </section>
 
@@ -721,7 +770,7 @@ function App() {
               <div className="row" style={{ marginBottom: 8 }}>
                 <strong>Chat</strong>
                 <button className="btn primary" onClick={runOnce} disabled={isRunning}>Run once</button>
-                {isRunning && <span>Running...</span>}
+                {isRunning && <span className="spinner" />}
               </div>
               {runError && (
                 <div style={{ whiteSpace: 'pre-wrap', color: '#f88', border: '1px solid #633', padding: 8, borderRadius: 6, marginBottom: 8 }}>{runError}</div>
@@ -731,7 +780,11 @@ function App() {
                 {runMessages.map((m, idx) => (
                   <div key={m.id || idx} style={{ textAlign: 'left' }}>
                     <div style={{ fontWeight: 600 }}>{m.role}</div>
-                    {m.content && <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>}
+                    {m.loading ? (
+                      <div className="panel shimmer" style={{ height: 48, borderColor: '#555' }} />
+                    ) : (
+                      m.content && <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
+                    )}
                     {Array.isArray(m.tool_calls) && m.tool_calls.length > 0 && (
                       <div style={{ marginTop: 6 }}>
                         <div style={{ fontWeight: 600 }}>Tool calls:</div>
