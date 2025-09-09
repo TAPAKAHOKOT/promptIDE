@@ -988,7 +988,7 @@ function App() {
                               </div>
                               {previewByMessageId[m.id] ? (
                                 <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
-                                  <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                                  <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', lineHeight: 0.5 }}>
                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
                                   </Typography.Paragraph>
                                 </div>

@@ -158,17 +158,51 @@ textarea {
 }
 
 /* Markdown content adjustments */
-.panel :where(h1,h2,h3,h4,h5,h6) { margin: 0.6em 0 0.3em; }
-.panel p { margin: 0.4em 0; }
+.panel :where(h1,h2,h3,h4,h5,h6) {
+  margin: 0; 
+}
+
+.panel p {
+  margin: 0.4em 0;
+  line-height: 1.5;
+}
+
 .panel pre {
   overflow: auto;
   background: var(--code-bg);
   border: 1px solid var(--code-border);
   border-radius: 6px;
-  padding: 8px;
+  padding: 8px 10px;
+  margin: 0.6em 0;
+  font-size: 0.95em;
 }
-.panel code { background: var(--code-bg); padding: 0 3px; border-radius: 4px; color: var(--text); }
-.panel ul, .panel ol { padding-left: 1.4em; }
+
+.panel code {
+  background: var(--code-bg);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.95em;
+}
+
+.panel ul,
+.panel ol {
+  margin: 0;
+  margin-top: -12px;
+  padding-left: 12px;
+  line-height: 0.8;
+}
+
+.panel li {
+  margin: 0.2em 0;
+}
+
+.panel blockquote {
+  margin: 0.6em 0;
+  padding-left: 1em;
+  border-left: 3px solid var(--code-border);
+  color: var(--text-muted);
+}
 
 /* Utility spacing */
 .row { display: flex; gap: 8px; align-items: center; }
