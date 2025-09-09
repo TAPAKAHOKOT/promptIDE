@@ -532,6 +532,16 @@ function App() {
     } catch {}
   }, [previewByMessageId, selectedPrompt?.id])
 
+  // Persisted UI state: Tools panel open/closed per prompt
+  const getToolsPanelDefault = (pid) => {
+    try {
+      const saved = pid ? localStorage.getItem(`tools_panel_open_${pid}`) : null
+      return saved == null ? true : (saved === '1' || saved === 'true')
+    } catch {
+      return true
+    }
+  }
+
   function mapToolsForOpenAI(p) {
     const tools = (p.tools || []).filter(t => t && t.name && t.enabled !== false)
     if (!tools.length) return undefined
@@ -655,7 +665,30 @@ function App() {
         const parts = msg.tool_calls.map(tc => {
           const name = tc?.function?.name || 'unknown'
           const args = tc?.function?.arguments || ''
-          return `Tool call: ${name}\narguments:\n${args}`
+          let argsString = ''
+          try {
+            const parsed = args ? JSON.parse(args) : {}
+            if (Array.isArray(parsed)) {
+              parsed.forEach(arg => {
+                if (arg && typeof arg === 'object') {
+                  const n = Object.prototype.hasOwnProperty.call(arg, 'name') ? arg.name : 'value'
+                  const v = Object.prototype.hasOwnProperty.call(arg, 'value') ? arg.value : arg
+                  argsString += `_${n}:_ ${typeof v === 'object' ? JSON.stringify(v) : String(v)}\n`
+                } else {
+                  argsString += `_value:_ ${String(arg)}\n`
+                }
+              })
+            } else if (parsed && typeof parsed === 'object') {
+              Object.entries(parsed).forEach(([k, v]) => {
+                argsString += `_${k}:_ ${typeof v === 'object' ? JSON.stringify(v) : String(v)}\n`
+              })
+            } else if (parsed != null) {
+              argsString += String(parsed)
+            }
+          } catch {
+            argsString = String(args || '')
+          }
+          return `**Tool call:** ${name}\n**arguments:**\n${argsString}`
         })
         contentToSave = parts.join('\n\n')
       } catch {
@@ -663,7 +696,9 @@ function App() {
       }
     }
     if (!contentToSave) return
-    updateSelected(p => ({ ...p, messages: [...p.messages, { id: crypto.randomUUID(), role: hasTools ? 'comment' : 'assistant', content: contentToSave }] }))
+    const mId = crypto.randomUUID();
+    updateSelected(p => ({ ...p, messages: [...p.messages, { id: mId, role: hasTools ? 'comment' : 'assistant', prev: 'Preview', content: contentToSave }] }))
+    setPreviewByMessageId(prev => ({ ...prev, [mId]: 'Preview' }))
   }
 
   // Read-only view for shared links
@@ -695,7 +730,7 @@ function App() {
                   {(sharedPreview.messages || []).map((m, i) => (
                     <div key={i} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                       <div style={{ fontWeight: 600, marginBottom: 6 }}>{m.role}</div>
-                      <div>
+                      <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
                       </div>
                     </div>
@@ -953,7 +988,7 @@ function App() {
                               </div>
                               {previewByMessageId[m.id] ? (
                                 <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
-                                  <Typography.Paragraph>
+                                  <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
                                   </Typography.Paragraph>
                                 </div>
@@ -983,81 +1018,100 @@ function App() {
             </section>
 
             <section>
-              <div className="row" style={{ marginTop: 12, marginBottom: 8 }}>
-                <strong>Tools</strong>
-                <Button size="small" onClick={addTool}>+ tool</Button>
-              </div>
-              <div className="col">
-                {(selectedPrompt.tools || []).map((t, i) => (
-                  <div key={i} className="panel" style={{ opacity: t.enabled !== false ? 1 : 0.5 }}>
-                    <div className="row" style={{ marginBottom: 6 }}>
-                      <Input value={t.name} onChange={e => updateTool(i, { name: e.target.value })} placeholder="Tool name" />
-                      <Switch size="small" checked={t.enabled !== false} onChange={val => updateTool(i, { enabled: val })} />
-                      <Popconfirm
-                        title="Удалить tool?"
-                        okText="Удалить"
-                        cancelText="Отмена"
-                        onConfirm={() => removeTool(i)}
-                      >
-                        <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
-                      </Popconfirm>
-                    </div>
-                    <Input value={t.description} onChange={e => updateTool(i, { description: e.target.value })} placeholder="Description" />
-                    <div style={{ marginTop: 8, borderTop: '1px dashed var(--panel-border)', paddingTop: 8 }}>
-                      <div className="row" style={{ marginBottom: 6 }}>
-                        <strong>Parameters</strong>
-                        <Button size="small" onClick={() => addParam(i)}>+ parameter</Button>
-                      </div>
-                      <div className="col">
-                        {parseParamsToFields(t.parameters || '').map((f, fi) => (
-                          <div key={fi} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 140px 80px', gap: 8, alignItems: 'center' }}>
-                              <Input
-                                value={f.key}
-                                onChange={e => updateParam(i, fi, { key: e.target.value })}
-                                placeholder="name"
-                              />
-                              <Select
-                                value={f.type}
-                                onChange={val => updateParam(i, fi, { type: val })}
-                                options={[
-                                  { value: 'string', label: 'string' },
-                                  { value: 'number', label: 'number' },
-                                  { value: 'integer', label: 'integer' },
-                                  { value: 'boolean', label: 'boolean' },
-                                ]}
-                              />
-                              <Checkbox
-                                checked={!!f.required}
-                                onChange={e => updateParam(i, fi, { required: e.target.checked })}
-                              >required</Checkbox>
-                              <Popconfirm
-                                title="Удалить параметр?"
-                                okText="Удалить"
-                                cancelText="Отмена"
-                                onConfirm={() => removeParam(i, fi)}
-                              >
-                                <Button type="text" size="small" danger icon={<DeleteOutlined />} title="Delete" />
-                              </Popconfirm>
-                            </div>
-                            <Input
-                              value={f.description}
-                              onChange={e => updateParam(i, fi, { description: e.target.value })}
-                              placeholder="description"
-                              style={{ marginTop: 6 }}
-                            />
+              <Collapse
+                key={`tools-${selectedPrompt?.id || 'none'}`}
+                defaultActiveKey={getToolsPanelDefault(selectedPrompt?.id) ? ['tools'] : []}
+                onChange={(keys) => {
+                  const isOpen = Array.isArray(keys) ? keys.includes('tools') : keys === 'tools'
+                  try { if (selectedPrompt) localStorage.setItem(`tools_panel_open_${selectedPrompt.id}`, isOpen ? '1' : '0') } catch {}
+                }}
+                style={{ marginTop: 12, marginBottom: 8 }}
+              >
+                <Collapse.Panel
+                  header="Tools"
+                  key="tools"
+                  extra={(
+                    <Button
+                      size="small"
+                      onClick={(e) => { e.stopPropagation(); addTool() }}
+                    >
+                      + tool
+                    </Button>
+                  )}
+                >
+                  <div className="col">
+                    {(selectedPrompt.tools || []).map((t, i) => (
+                      <div key={i} className="panel" style={{ opacity: t.enabled !== false ? 1 : 0.5 }}>
+                        <div className="row" style={{ marginBottom: 6 }}>
+                          <Input value={t.name} onChange={e => updateTool(i, { name: e.target.value })} placeholder="Tool name" />
+                          <Switch size="small" checked={t.enabled !== false} onChange={val => updateTool(i, { enabled: val })} />
+                          <Popconfirm
+                            title="Удалить tool?"
+                            okText="Удалить"
+                            cancelText="Отмена"
+                            onConfirm={() => removeTool(i)}
+                          >
+                            <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
+                          </Popconfirm>
+                        </div>
+                        <Input value={t.description} onChange={e => updateTool(i, { description: e.target.value })} placeholder="Description" />
+                        <div style={{ marginTop: 8, borderTop: '1px dashed var(--panel-border)', paddingTop: 8 }}>
+                          <div className="row" style={{ marginBottom: 6 }}>
+                            <strong>Parameters</strong>
+                            <Button size="small" onClick={() => addParam(i)}>+ parameter</Button>
                           </div>
-                        ))}
+                          <div className="col">
+                            {parseParamsToFields(t.parameters || '').map((f, fi) => (
+                              <div key={fi} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 140px 80px', gap: 8, alignItems: 'center' }}>
+                                  <Input
+                                    value={f.key}
+                                    onChange={e => updateParam(i, fi, { key: e.target.value })}
+                                    placeholder="name"
+                                  />
+                                  <Select
+                                    value={f.type}
+                                    onChange={val => updateParam(i, fi, { type: val })}
+                                    options={[
+                                      { value: 'string', label: 'string' },
+                                      { value: 'number', label: 'number' },
+                                      { value: 'integer', label: 'integer' },
+                                      { value: 'boolean', label: 'boolean' },
+                                    ]}
+                                  />
+                                  <Checkbox
+                                    checked={!!f.required}
+                                    onChange={e => updateParam(i, fi, { required: e.target.checked })}
+                                  >required</Checkbox>
+                                  <Popconfirm
+                                    title="Удалить параметр?"
+                                    okText="Удалить"
+                                    cancelText="Отмена"
+                                    onConfirm={() => removeParam(i, fi)}
+                                  >
+                                    <Button type="text" size="small" danger icon={<DeleteOutlined />} title="Delete" />
+                                  </Popconfirm>
+                                </div>
+                                <Input
+                                  value={f.description}
+                                  onChange={e => updateParam(i, fi, { description: e.target.value })}
+                                  placeholder="description"
+                                  style={{ marginTop: 6 }}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                          <Collapse style={{ marginTop: 8 }}>
+                            <Collapse.Panel header="Advanced (view JSON schema)" key="1">
+                              <pre style={{ whiteSpace: 'pre-wrap' }}>{t.parameters || ''}</pre>
+                            </Collapse.Panel>
+                          </Collapse>
+                        </div>
                       </div>
-                      <Collapse style={{ marginTop: 8 }}>
-                        <Collapse.Panel header="Advanced (view JSON schema)" key="1">
-                          <pre style={{ whiteSpace: 'pre-wrap' }}>{t.parameters || ''}</pre>
-                        </Collapse.Panel>
-                      </Collapse>
-                    </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </Collapse.Panel>
+              </Collapse>
             </section>
 
             <section style={{ marginTop: 12, paddingBottom: 24 }}>
@@ -1077,7 +1131,7 @@ function App() {
                       <div className="panel shimmer" style={{ height: 56, borderColor: 'var(--panel-border)' }} />
                     ) : (
                       m.content && (
-                        <Typography.Paragraph>
+                        <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
                         </Typography.Paragraph>
                       )
