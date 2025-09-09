@@ -6,6 +6,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
 import './App.css'
+import logo from './assets/logo.png'
 
 function newPrompt(overrides = {}) {
   return {
@@ -744,7 +745,10 @@ function App() {
       <Layout style={{ height: '100vh' }}>
         <Layout.Sider width={280} style={{ background: 'transparent', borderRight: '1px solid var(--panel-border)' }}>
           <div style={{ padding: 12 }} className="scrolly">
-            <Typography.Title level={4} style={{ marginTop: 0, color: 'var(--text)' }}>Prompt IDE</Typography.Title>
+            <Typography.Title level={4} style={{ marginTop: 0, color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <img src={logo} alt="Prompt IDE logo" style={{ width: 20, height: 20 }} />
+              <span>Prompt IDE</span>
+            </Typography.Title>
             <div className="row">
               <Input.Password
                 placeholder="OpenAI API Key"
