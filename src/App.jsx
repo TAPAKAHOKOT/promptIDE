@@ -7,6 +7,7 @@ import remarkGfm from 'remark-gfm'
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
 import './App.css'
 import logo from './assets/logo.png'
+import LZString from 'lz-string'
 
 function newPrompt(overrides = {}) {
   return {
@@ -50,33 +51,48 @@ function App() {
     }
   }, [])
 
-  // Detect shared prompt via URL (?share=...)
+  // Detect shared prompt via URL (#id=... or #share=...)
   useEffect(() => {
-    try {
-      // Prefer hash (#share=...), fallback to query (?share=...)
-      const getShare = () => {
-        if (window.location.hash && window.location.hash.startsWith('#')) {
-          const hp = new URLSearchParams(window.location.hash.slice(1))
-          const hv = hp.get('share')
-          if (hv) return hv
+    const load = async () => {
+      try {
+        const fromHashOrSearch = (key) => {
+          if (window.location.hash && window.location.hash.startsWith('#')) {
+            const hp = new URLSearchParams(window.location.hash.slice(1))
+            const hv = hp.get(key)
+            if (hv) return hv
+          }
+          const qp = new URLSearchParams(window.location.search)
+          return qp.get(key)
         }
-        const qp = new URLSearchParams(window.location.search)
-        return qp.get('share')
+        const id = fromHashOrSearch('id')
+        if (id && getShareBase()) {
+          const fetched = await fetchSharedById(id)
+          if (
+            fetched && (
+              (fetched.kind === 'run' && fetched.run && Array.isArray(fetched.run.transcript)) ||
+              Array.isArray(fetched.messages)
+            )
+          ) {
+            setSharedPreview(fetched)
+            return
+          }
+        }
+        const share = fromHashOrSearch('share')
+        if (!share) return
+        const decoded = decodeShared(share)
+        if (
+          decoded && (
+            (decoded.kind === 'run' && decoded.run && Array.isArray(decoded.run.transcript)) ||
+            Array.isArray(decoded.messages)
+          )
+        ) {
+          setSharedPreview(decoded)
+        }
+      } catch (e) {
+        console.error('Failed to parse shared prompt', e)
       }
-      const share = getShare()
-      if (!share) return
-      const decoded = decodeShared(share)
-      if (
-        decoded && (
-          (decoded.kind === 'run' && decoded.run && Array.isArray(decoded.run.transcript)) ||
-          Array.isArray(decoded.messages)
-        )
-      ) {
-        setSharedPreview(decoded)
-      }
-    } catch (e) {
-      console.error('Failed to parse shared prompt', e)
     }
+    load()
   }, [])
 
   // persist
@@ -248,6 +264,9 @@ function App() {
   function encodeShared(obj) {
     try {
       const json = JSON.stringify(obj)
+      const compressed = LZString.compressToEncodedURIComponent(json)
+      if (compressed && compressed.length > 0) return compressed
+      // Fallback to base64 if compression fails
       const bytes = new TextEncoder().encode(json)
       let binary = ''
       for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
@@ -257,7 +276,129 @@ function App() {
     }
   }
 
+  // Optional share service helpers (short links via UUID)
+  function getShareBase() {
+    try {
+      const base = import.meta.env.VITE_SHARE_BASE_URL || ''
+      return base ? String(base).replace(/\/+$/g, '') : ''
+    } catch {
+      return ''
+    }
+  }
+
+  async function fetchSharedById(id) {
+    const base = getShareBase()
+    if (!base || !id) return null
+    try {
+      const res = await fetch(`${base}/share/${encodeURIComponent(id)}`)
+      if (!res.ok) return null
+      // Expect either raw payload or { data: payload }
+      const body = await res.json().catch(() => null)
+      if (!body) return null
+      if (body && typeof body === 'object' && (body.kind || body.messages || body.run || body.tools)) return body
+      if (body && typeof body === 'object' && body.data) return body.data
+      return null
+    } catch {
+      return null
+    }
+  }
+
+  async function uploadSharedPayload(payload) {
+    const base = getShareBase()
+    if (!base || !payload) return null
+    // Try POST /share -> { id }
+    try {
+      const res = await fetch(`${base}/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (res.ok) {
+        const js = await res.json().catch(() => null)
+        const id = js?.id || js?.uuid || js?.key
+        if (typeof id === 'string' && id) return id
+      }
+    } catch {}
+    // Fallback: PUT /share/:id we generate
+    try {
+      const id = crypto.randomUUID()
+      const put = await fetch(`${base}/share/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (put.ok) return id
+    } catch {}
+    return null
+  }
+
+  // Shlink config + shortener (preferred over generic shortener when present)
+  function getShlinkConfig() {
+    try {
+      const base = import.meta.env.VITE_SHLINK_BASE_URL || ''
+      const apiKey = import.meta.env.VITE_SHLINK_API_KEY || ''
+      const domain = import.meta.env.VITE_SHLINK_DOMAIN || ''
+      return {
+        base: base ? String(base).replace(/\/+$/g, '') : '',
+        apiKey: apiKey || '',
+        domain: domain || '',
+      }
+    } catch(e) {
+      return { base: '', apiKey: '', domain: '' }
+    }
+  }
+
+  async function shortenWithShlink(longUrl) {
+    try {
+      const { base, apiKey, domain } = getShlinkConfig()
+      if (!base || !apiKey) return null
+      const res = await fetch(`${base}/rest/v3/short-urls`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Api-Key': apiKey,
+        },
+        body: JSON.stringify({ longUrl, findIfExists: true, ...(domain ? { domain } : {}) }),
+      })
+      if (!res.ok) return null
+      const js = await res.json().catch(() => null)
+      if (!js) return null
+      if (typeof js === 'string' && /^https?:\/\//i.test(js)) return js
+      if (typeof js?.shortUrl === 'string' && /^https?:\/\//i.test(js.shortUrl)) return js.shortUrl
+      if (js?.shortUrl && typeof js.shortUrl.shortUrl === 'string') return js.shortUrl.shortUrl
+      if (js?.shortCode) {
+        const host = domain || ((() => { try { return new URL(base).host } catch { return '' } })())
+        if (host && js.shortCode) return `https://${host}/${js.shortCode}`
+      }
+      return null
+    } catch(e) {
+      return null
+    }
+  }
+
+  // Optional external shortener for long URLs (no backend). Expects plain-text short URL response
+  async function shortenUrlIfConfigured(longUrl) {
+    try {
+      const base = import.meta.env.VITE_SHORTENER_BASE || ''
+      if (!base) return null
+      const endpoint = `${String(base).replace(/\/+$/g, '')}?url=${encodeURIComponent(longUrl)}`
+      const res = await fetch(endpoint)
+      if (!res.ok) return null
+      const text = (await res.text()).trim()
+      if (text && /^https?:\/\//i.test(text)) return text
+      return null
+    } catch {
+      return null
+    }
+  }
+
   function decodeShared(b64) {
+    // Prefer LZString first (new format)
+    try {
+      const json = LZString.decompressFromEncodedURIComponent(b64)
+      if (json && typeof json === 'string') return JSON.parse(json)
+    } catch {}
+    // Fallback: old base64 format
     try {
       const binary = atob(b64)
       const bytes = new Uint8Array(binary.length)
@@ -277,8 +418,32 @@ function App() {
       messages: (selectedPrompt.messages || []).filter(m => m && m.enabled !== false),
       tools: (selectedPrompt.tools || []).filter(t => t && t.enabled !== false),
     }
-    const b64 = encodeShared(payload)
-    const url = `${window.location.origin}${window.location.pathname}#share=${encodeURIComponent(b64)}`
+    let url = ''
+    // Prefer short link via backend if configured
+    try {
+      const base = getShareBase()
+      if (base) {
+        const id = await uploadSharedPayload(payload)
+        if (id) url = `${window.location.origin}${window.location.pathname}#id=${encodeURIComponent(id)}`
+      }
+    } catch {}
+    if (!url) {
+      const val = encodeShared(payload)
+      const hp = new URLSearchParams()
+      hp.set('share', val)
+      url = `${window.location.origin}${window.location.pathname}#${hp.toString()}`
+    }
+    // Try to shorten via Shlink first (if no backend id link)
+    if (!getShareBase()) {
+      try {
+        const sh = await shortenWithShlink(url)
+        if (sh) url = sh
+        else {
+          const shorted = await shortenUrlIfConfigured(url)
+          if (shorted) url = shorted
+        }
+      } catch {}
+    }
     try {
       await navigator.clipboard.writeText(url)
       messageApi.success('Link copied')
@@ -420,9 +585,11 @@ function App() {
     try {
       const url = new URL(window.location.href)
       url.searchParams.delete('share')
-      if (url.hash.includes('share=')) {
+      url.searchParams.delete('id')
+      if (url.hash) {
         const hp = new URLSearchParams(url.hash.slice(1))
         hp.delete('share')
+        hp.delete('id')
         url.hash = hp.toString() ? `#${hp.toString()}` : ''
       }
       window.history.replaceState({}, '', url.toString())
