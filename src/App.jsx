@@ -21,6 +21,9 @@ function App() {
   const [sharedPreview, setSharedPreview] = useState(null)
   const [copyNotice, setCopyNotice] = useState('')
   const [model, setModel] = useState('gpt-4o-mini')
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('theme') || 'dark' } catch { return 'dark' }
+  })
 
   // load from localStorage once
   useEffect(() => {
@@ -97,6 +100,11 @@ function App() {
       localStorage.setItem('openai_model', model)
     } catch {}
   }, [model, isLoaded])
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    try { localStorage.setItem('theme', theme) } catch {}
+  }, [theme])
 
   const selectedPrompt = useMemo(
     () => prompts.find(p => p.id === selectedId) || null,
@@ -214,25 +222,6 @@ function App() {
     try {
       await navigator.clipboard.writeText(url)
       setCopyNotice('Prompt link copied')
-      setTimeout(() => setCopyNotice(''), 1500)
-    } catch {
-      setCopyNotice('Copy failed')
-      setTimeout(() => setCopyNotice(''), 1500)
-    }
-  }
-
-  async function copyRunLink() {
-    if (!selectedPrompt) return
-    const payload = {
-      kind: 'run',
-      title: selectedPrompt.title,
-      run: { transcript: runMessages || [] },
-    }
-    const b64 = encodeShared(payload)
-    const url = `${window.location.origin}${window.location.pathname}#share=${encodeURIComponent(b64)}`
-    try {
-      await navigator.clipboard.writeText(url)
-      setCopyNotice('Run link copied')
       setTimeout(() => setCopyNotice(''), 1500)
     } catch {
       setCopyNotice('Copy failed')
@@ -543,16 +532,16 @@ function App() {
             <button className="btn ghost" onClick={() => navigator.clipboard.writeText(window.location.href)}>Copy link</button>
           </div>
           <div className="col" style={{ marginTop: 12 }}>
-            <div className="panel" style={{ borderColor: '#555' }}>
+            <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
               <strong>Title</strong>
               <div style={{ marginTop: 6 }}>{sharedPreview.title || 'Untitled'}</div>
             </div>
             {sharedPreview.kind !== 'run' && (
-              <div className="panel" style={{ borderColor: '#555' }}>
+              <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                 <strong>Messages</strong>
                 <div className="col" style={{ marginTop: 8 }}>
                   {(sharedPreview.messages || []).map((m, i) => (
-                    <div key={i} className="panel" style={{ borderColor: '#555' }}>
+                    <div key={i} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                       <div style={{ fontWeight: 600, marginBottom: 6 }}>{m.role}</div>
                       <div>
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
@@ -563,11 +552,11 @@ function App() {
               </div>
             )}
             {sharedPreview.kind !== 'prompt' && sharedPreview.run?.transcript && (
-              <div className="panel" style={{ borderColor: '#555' }}>
+              <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                 <strong>Last run transcript</strong>
                 <div className="col" style={{ marginTop: 8 }}>
                   {sharedPreview.run.transcript.map((m, i) => (
-                    <div key={i} className="panel" style={{ borderColor: '#555' }}>
+                    <div key={i} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                       <div style={{ fontWeight: 600, marginBottom: 6 }}>{m.role}</div>
                       {m.content && <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>}
                       {Array.isArray(m.tool_calls) && m.tool_calls.length > 0 && (
@@ -575,7 +564,7 @@ function App() {
                           <div style={{ fontWeight: 600 }}>Tool calls:</div>
                           <div className="col" style={{ gap: 6 }}>
                             {m.tool_calls.map((tc, j) => (
-                              <div key={j} className="panel" style={{ borderStyle: 'dashed', borderColor: '#666' }}>
+                              <div key={j} className="panel" style={{ borderStyle: 'dashed', borderColor: 'var(--panel-border)' }}>
                                 <div><strong>name:</strong> {tc?.function?.name || 'unknown'}</div>
                                 <div><strong>arguments:</strong></div>
                                 <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{tc?.function?.arguments || ''}</pre>
@@ -590,11 +579,11 @@ function App() {
               </div>
             )}
             {sharedPreview.kind !== 'run' && (
-              <div className="panel" style={{ borderColor: '#555' }}>
+              <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                 <strong>Tools</strong>
                 <div className="col" style={{ marginTop: 8 }}>
                   {(sharedPreview.tools || []).map((t, i) => (
-                    <div key={i} className="panel" style={{ borderColor: '#555' }}>
+                    <div key={i} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                       <div style={{ fontWeight: 600 }}>{t.name}</div>
                       {t.description && <div style={{ color: 'var(--muted)', marginTop: 4 }}>{t.description}</div>}
                       <details style={{ marginTop: 8 }}>
@@ -614,7 +603,7 @@ function App() {
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', height: '100vh' }}>
-      <aside style={{ borderRight: '1px solid #333', padding: '12px', overflow: 'auto' }} className="scrolly">
+      <aside style={{ borderRight: '1px solid var(--panel-border)', padding: '12px', overflow: 'auto' }} className="scrolly">
         <h2 style={{ marginTop: 0 }}>Prompt IDE</h2>
         <div className="row">
           <input
@@ -624,13 +613,19 @@ function App() {
             onChange={e => setApiKey(e.target.value)}
             style={{ flex: 1 }}
           />
+          <span className="select">
+            <select value={theme} onChange={e => setTheme(e.target.value)}>
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+          </span>
         </div>
         <div style={{ marginTop: 12 }} className="row">
           <button className="btn primary" onClick={addPrompt}>New Prompt</button>
         </div>
         <div style={{ marginTop: 12, gap: 6 }} className="col">
           {prompts.map(p => (
-            <div key={p.id} className="panel" style={{ background: selectedId === p.id ? '#2a2a2a' : 'transparent' }}>
+            <div key={p.id} className="panel" style={{ background: selectedId === p.id ? 'var(--selected-bg)' : 'var(--panel)' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 8, alignItems: 'center' }}>
                 <button
                   className="btn ghost"
@@ -657,11 +652,11 @@ function App() {
                 </div>
                 <div className="col">
                   <input value={sharedPreview.title || ''} readOnly />
-                  <div className="panel" style={{ borderColor: '#555' }}>
+                  <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                     <strong>Messages</strong>
                     <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(sharedPreview.messages || [], null, 2)}</pre>
                   </div>
-                  <div className="panel" style={{ borderColor: '#555' }}>
+                  <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                     <strong>Tools</strong>
                     <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(sharedPreview.tools || [], null, 2)}</pre>
                   </div>
@@ -696,7 +691,6 @@ function App() {
                 </select>
               </span>
               <button className="btn ghost" onClick={copyPromptLink}>Copy prompt link</button>
-              <button className="btn ghost" onClick={copyRunLink}>Copy run link</button>
               {copyNotice && <span style={{ color: 'var(--muted)' }}>{copyNotice}</span>}
             </div>
 
@@ -722,7 +716,7 @@ function App() {
                       <button className="btn danger" onClick={() => removeMessage(m.id)}>Delete</button>
                     </div>
                     {previewByMessageId[m.id] ? (
-                      <div className="panel" style={{ borderColor: '#555' }}>
+                      <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
                       </div>
                     ) : (
@@ -757,14 +751,14 @@ function App() {
                       <button className="btn danger" onClick={() => removeTool(i)}>Delete</button>
                     </div>
                     <input value={t.description} onChange={e => updateTool(i, { description: e.target.value })} placeholder="Description" />
-                    <div style={{ marginTop: 8, borderTop: '1px dashed #555', paddingTop: 8 }}>
+                    <div style={{ marginTop: 8, borderTop: '1px dashed var(--panel-border)', paddingTop: 8 }}>
                       <div className="row" style={{ marginBottom: 6 }}>
                         <strong>Parameters</strong>
                         <button className="btn ghost" onClick={() => addParam(i)}>+ parameter</button>
                       </div>
                       <div className="col">
                         {parseParamsToFields(t.parameters || '').map((f, fi) => (
-                          <div key={fi} className="panel" style={{ borderColor: '#555' }}>
+                          <div key={fi} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 100px 80px', gap: 8, alignItems: 'center' }}>
                               <input
                                 value={f.key}
@@ -815,15 +809,15 @@ function App() {
                 {isRunning && <span className="spinner" />}
               </div>
               {runError && (
-                <div style={{ whiteSpace: 'pre-wrap', color: '#f88', border: '1px solid #633', padding: 8, borderRadius: 6, marginBottom: 8 }}>{runError}</div>
+                <div style={{ whiteSpace: 'pre-wrap', color: 'var(--danger-contrast)', background: 'var(--danger-bg)', border: '1px solid var(--danger-border)', padding: 8, borderRadius: 6, marginBottom: 8 }}>{runError}</div>
               )}
               <div className="panel scrolly" style={{ maxHeight: 280, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {runMessages.length === 0 && <div style={{ color: '#888' }}>Нажмите Run once, чтобы получить ответ модели.</div>}
+                {runMessages.length === 0 && <div style={{ color: 'var(--muted)' }}>Нажмите Run once, чтобы получить ответ модели.</div>}
                 {runMessages.map((m, idx) => (
                   <div key={m.id || idx} style={{ textAlign: 'left' }}>
                     <div style={{ fontWeight: 600 }}>{m.role}</div>
                     {m.loading ? (
-                      <div className="panel shimmer" style={{ height: 48, borderColor: '#555' }} />
+                      <div className="panel shimmer" style={{ height: 56, borderColor: 'var(--panel-border)' }} />
                     ) : (
                       m.content && <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
                     )}
@@ -832,7 +826,7 @@ function App() {
                         <div style={{ fontWeight: 600 }}>Tool calls:</div>
                         <div className="col" style={{ gap: 6 }}>
                           {m.tool_calls.map((tc, i) => (
-                            <div key={i} className="panel" style={{ borderStyle: 'dashed', borderColor: '#666' }}>
+                            <div key={i} className="panel" style={{ borderStyle: 'dashed', borderColor: 'var(--panel-border)' }}>
                               <div><strong>name:</strong> {tc?.function?.name || 'unknown'}</div>
                               <div><strong>arguments:</strong></div>
                               <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{tc?.function?.arguments || ''}</pre>
@@ -865,7 +859,7 @@ function App() {
           </div>
         </div>
       )}
-    </div>
+      </div>
   )
 }
 
