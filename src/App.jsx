@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ConfigProvider, Layout, Button, Input, Segmented, Typography, Space, Select, message, Switch, Checkbox, Collapse, Alert, Spin, App as AntApp, Popconfirm } from 'antd'
 import { theme as antdTheme } from 'antd'
-import { SunOutlined, MoonOutlined, CopyOutlined, DeleteOutlined, ExclamationCircleFilled, HolderOutlined } from '@ant-design/icons'
+import { SunOutlined, MoonOutlined, CopyOutlined, DeleteOutlined, HolderOutlined, DownOutlined, RightOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
@@ -146,6 +146,25 @@ function App() {
         localStorage.setItem(`preview_state_${copy.id}`, JSON.stringify(newMap))
       }
     } catch {}
+    // Preserve per-message collapsed state by remapping original IDs to new ones
+    try {
+      const rawCollapsed = localStorage.getItem(`collapsed_state_${original.id}`)
+      const prevCollapsed = rawCollapsed ? JSON.parse(rawCollapsed) : {}
+      if (prevCollapsed && typeof prevCollapsed === 'object') {
+        const newCollapsed = {}
+        for (let i = 0; i < original.messages.length && i < copy.messages.length; i++) {
+          const origId = original.messages[i]?.id
+          const newId = copy.messages[i]?.id
+          if (origId && newId && prevCollapsed[origId]) newCollapsed[newId] = true
+        }
+        localStorage.setItem(`collapsed_state_${copy.id}`, JSON.stringify(newCollapsed))
+      }
+    } catch {}
+    // Preserve Tools panel open/closed state
+    try {
+      const toolsOpen = localStorage.getItem(`tools_panel_open_${original.id}`)
+      if (toolsOpen != null) localStorage.setItem(`tools_panel_open_${copy.id}`, toolsOpen)
+    } catch {}
     setPrompts(prev => [copy, ...prev])
     setSelectedId(copy.id)
   }
@@ -285,6 +304,8 @@ function App() {
           content: m?.content || '',
           enabled: m?.enabled !== false,
           preview: !!previewByMessageId[m?.id],
+          collapsed: !!collapsedByMessageId[m?.id],
+          label: m?.label || '',
         })),
         tools: (selectedPrompt.tools || []).map(t => ({
           name: t?.name || 'toolName',
@@ -292,6 +313,7 @@ function App() {
           parameters: typeof t?.parameters === 'string' ? t.parameters : JSON.stringify(t?.parameters || { type: 'object', properties: {} }),
           enabled: t?.enabled !== false,
         })),
+        toolsPanelOpen: getToolsPanelDefault(selectedPrompt.id),
       }
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
@@ -331,6 +353,8 @@ function App() {
           content: m?.content || '',
           enabled: m?.enabled !== false,
           __preview: !!m?.preview,
+          __collapsed: !!m?.collapsed,
+          label: typeof m?.label === 'string' ? m.label : '',
         }))
         const created = newPrompt({
           title: (typeof data?.title === 'string' && data.title.trim()) ? data.title.trim() : 'Imported Prompt',
@@ -342,13 +366,22 @@ function App() {
             enabled: t?.enabled !== false,
           })),
         })
-        // Persist preview state for this prompt before selecting it
+        // Persist preview and collapsed state for this prompt before selecting it
         try {
           const previewMap = {}
+          const collapsedMap = {}
           for (const m of createdMessages) {
             if (m.__preview) previewMap[m.id] = true
+            if (m.__collapsed) collapsedMap[m.id] = true
           }
           localStorage.setItem(`preview_state_${created.id}`, JSON.stringify(previewMap))
+          localStorage.setItem(`collapsed_state_${created.id}`, JSON.stringify(collapsedMap))
+        } catch {}
+        // Restore Tools panel open/closed state from imported JSON
+        try {
+          if (typeof data?.toolsPanelOpen === 'boolean') {
+            localStorage.setItem(`tools_panel_open_${created.id}`, data.toolsPanelOpen ? '1' : '0')
+          }
         } catch {}
         setPrompts(prev => [created, ...prev])
         setSelectedId(created.id)
@@ -480,6 +513,7 @@ function App() {
   const [isRunning, setIsRunning] = useState(false)
   const [runError, setRunError] = useState('')
   const [previewByMessageId, setPreviewByMessageId] = useState({})
+  const [collapsedByMessageId, setCollapsedByMessageId] = useState({})
 
   useEffect(() => {
     if (selectedPrompt) {
@@ -502,12 +536,19 @@ function App() {
       } catch {
         setPreviewByMessageId({})
       }
+      try {
+        const collapsedSaved = JSON.parse(localStorage.getItem(`collapsed_state_${selectedPrompt.id}`) || 'null')
+        setCollapsedByMessageId(collapsedSaved && typeof collapsedSaved === 'object' ? collapsedSaved : {})
+      } catch {
+        setCollapsedByMessageId({})
+      }
       setRunError('')
     } else {
       setRunMessages([])
       setChatInput('')
       setRunError('')
       setPreviewByMessageId({})
+      setCollapsedByMessageId({})
     }
   }, [selectedPrompt?.id])
 
@@ -531,6 +572,13 @@ function App() {
       localStorage.setItem(`preview_state_${selectedPrompt.id}`, JSON.stringify(previewByMessageId || {}))
     } catch {}
   }, [previewByMessageId, selectedPrompt?.id])
+
+  useEffect(() => {
+    if (!selectedPrompt) return
+    try {
+      localStorage.setItem(`collapsed_state_${selectedPrompt.id}`, JSON.stringify(collapsedByMessageId || {}))
+    } catch {}
+  }, [collapsedByMessageId, selectedPrompt?.id])
 
   // Persisted UI state: Tools panel open/closed per prompt
   const getToolsPanelDefault = (pid) => {
@@ -957,6 +1005,9 @@ function App() {
                                 >
                                   <HolderOutlined />
                                 </span>
+                                <Button type="text" size="small" onClick={() => setCollapsedByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
+                                  {collapsedByMessageId[m.id] ? <RightOutlined /> : <DownOutlined /> }
+                                </Button>
                                 <Select
                                   size="small"
                                   value={m.role}
@@ -968,6 +1019,13 @@ function App() {
                                     { value: 'assistant', label: 'assistant' },
                                     { value: 'comment', label: 'comment' },
                                   ]}
+                                />
+                                <Input
+                                  size="small"
+                                  value={m.label || ''}
+                                  onChange={e => updateMessage(m.id, { label: e.target.value })}
+                                  placeholder="label"
+                                  style={{ width: 160 }}
                                 />
                                 <Button size="small" onClick={() => setPreviewByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
                                   {previewByMessageId[m.id] ? 'Edit' : 'Preview'}
@@ -986,19 +1044,21 @@ function App() {
                                   <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
                                 </Popconfirm>
                               </div>
-                              {previewByMessageId[m.id] ? (
-                                <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
-                                  <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', lineHeight: 0.5 }}>
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
-                                  </Typography.Paragraph>
-                                </div>
-                              ) : (
-                                <Input.TextArea
-                                  value={m.content}
-                                  onChange={e => updateMessage(m.id, { content: e.target.value })}
-                                  rows={8}
-                                  placeholder="Message content (Markdown supported)"
-                                />
+                              {!collapsedByMessageId[m.id] && (
+                                previewByMessageId[m.id] ? (
+                                  <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
+                                    <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', lineHeight: 0.5 }}>
+                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
+                                    </Typography.Paragraph>
+                                  </div>
+                                ) : (
+                                  <Input.TextArea
+                                    value={m.content}
+                                    onChange={e => updateMessage(m.id, { content: e.target.value })}
+                                    rows={8}
+                                    placeholder="Message content (Markdown supported)"
+                                  />
+                                )
                               )}
                             </div>
                           )}
