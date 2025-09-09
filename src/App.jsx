@@ -132,6 +132,20 @@ function App() {
       messages: original.messages.map(m => ({ ...m, id: crypto.randomUUID() })),
       tools: original.tools ? [...original.tools] : [],
     })
+    // Preserve per-message preview state by remapping original IDs to new ones
+    try {
+      const raw = localStorage.getItem(`preview_state_${original.id}`)
+      const prevMap = raw ? JSON.parse(raw) : {}
+      if (prevMap && typeof prevMap === 'object') {
+        const newMap = {}
+        for (let i = 0; i < original.messages.length && i < copy.messages.length; i++) {
+          const origId = original.messages[i]?.id
+          const newId = copy.messages[i]?.id
+          if (origId && newId && prevMap[origId]) newMap[newId] = true
+        }
+        localStorage.setItem(`preview_state_${copy.id}`, JSON.stringify(newMap))
+      }
+    } catch {}
     setPrompts(prev => [copy, ...prev])
     setSelectedId(copy.id)
   }
@@ -635,7 +649,8 @@ function App() {
     const msg = runMessages[indexInRun]
     if (!msg || msg.role !== 'assistant') return
     let contentToSave = (msg.content || '').trim()
-    if (!contentToSave && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+    const hasTools = Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0;
+    if (!contentToSave && hasTools) {
       try {
         const parts = msg.tool_calls.map(tc => {
           const name = tc?.function?.name || 'unknown'
@@ -648,7 +663,7 @@ function App() {
       }
     }
     if (!contentToSave) return
-    updateSelected(p => ({ ...p, messages: [...p.messages, { id: crypto.randomUUID(), role: 'comment', content: contentToSave }] }))
+    updateSelected(p => ({ ...p, messages: [...p.messages, { id: crypto.randomUUID(), role: hasTools ? 'comment' : 'assistant', content: contentToSave }] }))
   }
 
   // Read-only view for shared links
