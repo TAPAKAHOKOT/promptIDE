@@ -10,10 +10,10 @@
   --panel-border: #2a2b36;
   --muted: #9aa1b2;
   --text: #e7ebf4;
-  --accent: #7b9cff;
-  --accent-2: #7bffda;
+  --accent: #55A6D9;
+  --accent-2: #2594D9;
   --danger: #ff6b6b;
-  --success: #62d394;
+  --success: #88BDBC;
   --code-bg: #111;
   --code-border: #333;
   /* Extended tokens */
@@ -29,6 +29,9 @@
   --danger-contrast: #ffb3b3;
   --shimmer-a: rgba(255,255,255,0.05);
   --shimmer-b: rgba(255,255,255,0.10);
+  --toggle-off: var(--panel-border);
+  --toggle-on: var(--success);
+  --toggle-thumb: var(--text);
   background-color: var(--bg);
   color: var(--text);
 
@@ -61,8 +64,8 @@ h1 {
 button, input, textarea, select {
   border-radius: 8px;
   border: 1px solid var(--panel-border);
-  padding: 0.6em 1.2em;
-  font-size: 1em;
+  padding: 6px 12px;
+  font-size: 14px;
   font-weight: 500;
   font-family: inherit;
   background-color: var(--panel);
@@ -88,10 +91,10 @@ select:focus {
   --panel-border: #dfe3ea;
   --muted: #5a6373;
   --text: #1b2430;
-  --accent: #3558ff;
-  --accent-2: #22c7a9;
+  --accent: #90CCF4;
+  --accent-2: #90CCF4;
   --danger: #d64545;
-  --success: #21a179;
+  --success: #88BDBC;
   --code-bg: #f5f7fb;
   --code-border: #e3e7f0;
   --selected-bg: #e8edff;
@@ -104,6 +107,9 @@ select:focus {
   --danger-bg: #ffe9e9;
   --danger-border: #f3b3b3;
   --danger-contrast: #a11a1a;
+  --toggle-off: var(--panel-border);
+  --toggle-on: var(--success);
+  --toggle-thumb: var(--text);
 }
 
 [data-theme="light"] .panel { box-shadow: 0 1px 2px var(--panel-shadow-1-color), 0 8px 24px var(--panel-shadow-2-color); }
@@ -229,6 +235,30 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 .btn.danger { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger-contrast); }
 .btn.danger:hover { border-color: var(--danger); }
 .btn.ghost { background: transparent; }
+
+/* Toggle switch */
+.toggle {
+  position: relative;
+  width: 36px;
+  height: 22px;
+  border-radius: 9999px;
+  background: var(--toggle-off);
+  border: 1px solid var(--panel-border);
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.toggle .toggle-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--toggle-thumb);
+  transform: translateX(2px);
+  transition: transform 0.2s ease;
+}
+.toggle.on { background: var(--toggle-on); border-color: transparent; }
+.toggle.on .toggle-thumb { transform: translateX(16px); }
 
 /* Custom select */
 .select {

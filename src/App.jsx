@@ -144,7 +144,7 @@ function App() {
 
   function addMessage(role = 'user') {
     if (!selectedPrompt) return
-    const msg = { id: crypto.randomUUID(), role, content: '' }
+    const msg = { id: crypto.randomUUID(), role, content: '', enabled: true }
     updateSelected(p => ({ ...p, messages: [...p.messages, msg] }))
   }
 
@@ -162,7 +162,7 @@ function App() {
   }
 
   function addTool() {
-    const tool = { name: 'toolName', description: '', parameters: '{"type":"object","properties":{}}' }
+    const tool = { name: 'toolName', description: '', parameters: '{"type":"object","properties":{}}', enabled: true }
     updateSelected(p => ({ ...p, tools: [...(p.tools || []), tool] }))
   }
 
@@ -214,8 +214,8 @@ function App() {
     const payload = {
       kind: 'prompt',
       title: selectedPrompt.title,
-      messages: selectedPrompt.messages,
-      tools: selectedPrompt.tools || [],
+      messages: (selectedPrompt.messages || []).filter(m => m && m.enabled !== false),
+      tools: (selectedPrompt.tools || []).filter(t => t && t.enabled !== false),
     }
     const b64 = encodeShared(payload)
     const url = `${window.location.origin}${window.location.pathname}#share=${encodeURIComponent(b64)}`
@@ -233,8 +233,12 @@ function App() {
     if (!sharedPreview) return
     const created = newPrompt({
       title: sharedPreview.title || 'Imported Prompt',
-      messages: Array.isArray(sharedPreview.messages) ? sharedPreview.messages.map(m => ({ ...m, id: crypto.randomUUID() })) : [],
-      tools: Array.isArray(sharedPreview.tools) ? sharedPreview.tools : [],
+      messages: Array.isArray(sharedPreview.messages)
+        ? sharedPreview.messages.map(m => ({ ...m, id: crypto.randomUUID(), enabled: m?.enabled !== false }))
+        : [],
+      tools: Array.isArray(sharedPreview.tools)
+        ? (sharedPreview.tools || []).map(t => ({ ...t, enabled: t?.enabled !== false }))
+        : [],
     })
     setPrompts(prev => [created, ...prev])
     setSelectedId(created.id)
@@ -369,11 +373,18 @@ function App() {
       } catch {
         setChatInput('')
       }
+      try {
+        const previewSaved = JSON.parse(localStorage.getItem(`preview_state_${selectedPrompt.id}`) || 'null')
+        setPreviewByMessageId(previewSaved && typeof previewSaved === 'object' ? previewSaved : {})
+      } catch {
+        setPreviewByMessageId({})
+      }
       setRunError('')
     } else {
       setRunMessages([])
       setChatInput('')
       setRunError('')
+      setPreviewByMessageId({})
     }
   }, [selectedPrompt?.id])
 
@@ -391,8 +402,15 @@ function App() {
     } catch {}
   }, [chatInput, selectedPrompt?.id])
 
+  useEffect(() => {
+    if (!selectedPrompt) return
+    try {
+      localStorage.setItem(`preview_state_${selectedPrompt.id}`, JSON.stringify(previewByMessageId || {}))
+    } catch {}
+  }, [previewByMessageId, selectedPrompt?.id])
+
   function mapToolsForOpenAI(p) {
-    const tools = (p.tools || []).filter(t => t && t.name)
+    const tools = (p.tools || []).filter(t => t && t.name && t.enabled !== false)
     if (!tools.length) return undefined
     const mapped = []
     for (const t of tools) {
@@ -427,6 +445,7 @@ function App() {
         model: model || 'gpt-4o-mini',
         messages: messages
           .filter(m => m.role !== 'comment')
+          .filter(m => m.enabled !== false)
           .map(m => ({ role: m.role, content: m.content })),
         temperature: 0.7,
       }
@@ -529,7 +548,12 @@ function App() {
         <div className="panel" style={{ maxWidth: 960, margin: '0 auto' }}>
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <h2 style={{ margin: 0 }}>Shared Prompt</h2>
-            <button className="btn ghost" onClick={() => navigator.clipboard.writeText(window.location.href)}>Copy link</button>
+            <span className="select">
+              <select value={theme} onChange={e => setTheme(e.target.value)}>
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </span>
           </div>
           <div className="col" style={{ marginTop: 12 }}>
             <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
@@ -558,7 +582,7 @@ function App() {
                   {sharedPreview.run.transcript.map((m, i) => (
                     <div key={i} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                       <div style={{ fontWeight: 600, marginBottom: 6 }}>{m.role}</div>
-                      {m.content && <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>}
+                      {m.content && <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>}
                       {Array.isArray(m.tool_calls) && m.tool_calls.length > 0 && (
                         <div style={{ marginTop: 6 }}>
                           <div style={{ fontWeight: 600 }}>Tool calls:</div>
@@ -700,7 +724,7 @@ function App() {
       </div>
               <div className="col">
                 {selectedPrompt.messages.map(m => (
-                  <div key={m.id} className="panel">
+                  <div key={m.id} className="panel" style={{ opacity: m.enabled !== false ? 1 : 0.5 }}>
                     <div className="row" style={{ marginBottom: 6 }}>
                       <span className="select">
                         <select value={m.role} onChange={e => updateMessage(m.id, { role: e.target.value })}>
@@ -713,6 +737,13 @@ function App() {
                       <button className="btn ghost" onClick={() => setPreviewByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
                         {previewByMessageId[m.id] ? 'Edit' : 'Preview'}
         </button>
+                      <button
+                        className={`toggle ${m.enabled !== false ? 'on' : ''}`}
+                        onClick={() => updateMessage(m.id, { enabled: !(m.enabled !== false) })}
+                        title={m.enabled !== false ? 'Disable' : 'Enable'}
+                      >
+                        <span className="toggle-thumb" />
+                      </button>
                       <button className="btn danger" onClick={() => removeMessage(m.id)}>Delete</button>
                     </div>
                     {previewByMessageId[m.id] ? (
@@ -745,9 +776,16 @@ function App() {
               </div>
               <div className="col">
                 {(selectedPrompt.tools || []).map((t, i) => (
-                  <div key={i} className="panel">
+                  <div key={i} className="panel" style={{ opacity: t.enabled !== false ? 1 : 0.5 }}>
                     <div className="row" style={{ marginBottom: 6 }}>
                       <input value={t.name} onChange={e => updateTool(i, { name: e.target.value })} placeholder="Tool name" />
+                      <button
+                        className={`toggle ${t.enabled !== false ? 'on' : ''}`}
+                        onClick={() => updateTool(i, { enabled: !(t.enabled !== false) })}
+                        title={t.enabled !== false ? 'Disable' : 'Enable'}
+                      >
+                        <span className="toggle-thumb" />
+                      </button>
                       <button className="btn danger" onClick={() => removeTool(i)}>Delete</button>
                     </div>
                     <input value={t.description} onChange={e => updateTool(i, { description: e.target.value })} placeholder="Description" />
@@ -802,24 +840,24 @@ function App() {
               </div>
             </section>
 
-            <section style={{ marginTop: 12 }}>
+            <section style={{ marginTop: 12, paddingBottom: 24 }}>
               <div className="row" style={{ marginBottom: 8 }}>
                 <strong>Chat</strong>
-                <button className="btn primary" onClick={runOnce} disabled={isRunning}>Run once</button>
+                <button className="btn primary" onClick={runOnce} disabled={isRunning}>Run</button>
                 {isRunning && <span className="spinner" />}
               </div>
               {runError && (
                 <div style={{ whiteSpace: 'pre-wrap', color: 'var(--danger-contrast)', background: 'var(--danger-bg)', border: '1px solid var(--danger-border)', padding: 8, borderRadius: 6, marginBottom: 8 }}>{runError}</div>
               )}
-              <div className="panel scrolly" style={{ maxHeight: 280, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {runMessages.length === 0 && <div style={{ color: 'var(--muted)' }}>Нажмите Run once, чтобы получить ответ модели.</div>}
+              <div className="panel" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {runMessages.length === 0 && <div style={{ color: 'var(--muted)' }}>Press Run to get a response from the model.</div>}
                 {runMessages.map((m, idx) => (
                   <div key={m.id || idx} style={{ textAlign: 'left' }}>
-                    <div style={{ fontWeight: 600 }}>{m.role}</div>
+                    {m.role !== 'assistant' && <div style={{ fontWeight: 600 }}>{m.role}</div>}
                     {m.loading ? (
                       <div className="panel shimmer" style={{ height: 56, borderColor: 'var(--panel-border)' }} />
                     ) : (
-                      m.content && <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
+                      m.content && <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
                     )}
                     {Array.isArray(m.tool_calls) && m.tool_calls.length > 0 && (
                       <div style={{ marginTop: 6 }}>
