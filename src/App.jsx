@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ConfigProvider, Layout, Button, Input, Segmented, Typography, Space, Select, message, Switch, Checkbox, Collapse, Alert, Spin, App as AntApp, Popconfirm } from 'antd'
 import { theme as antdTheme } from 'antd'
 import { SunOutlined, MoonOutlined, CopyOutlined, DeleteOutlined, ExclamationCircleFilled, HolderOutlined } from '@ant-design/icons'
@@ -29,6 +29,7 @@ function App() {
     try { return localStorage.getItem('theme') || 'dark' } catch { return 'dark' }
   })
   const [messageApi, messageContextHolder] = message.useMessage()
+  const importInputRef = useRef(null)
 
   // load from localStorage once
   useEffect(() => {
@@ -246,14 +247,108 @@ function App() {
     const url = `${window.location.origin}${window.location.pathname}#share=${encodeURIComponent(b64)}`
     try {
       await navigator.clipboard.writeText(url)
-      messageApi.success('Prompt link copied')
-      setCopyNotice('Prompt link copied')
+      messageApi.success('Link copied')
+      setCopyNotice('Link copied')
       setTimeout(() => setCopyNotice(''), 1500)
     } catch {
       messageApi.error('Copy failed')
       setCopyNotice('Copy failed')
       setTimeout(() => setCopyNotice(''), 1500)
     }
+  }
+
+  // Export selected prompt as JSON file
+  function exportSelectedPromptAsJson() {
+    if (!selectedPrompt) return
+    try {
+      const payload = {
+        kind: 'prompt',
+        version: 2,
+        title: selectedPrompt.title || 'Untitled',
+        messages: (selectedPrompt.messages || []).map(m => ({
+          role: m?.role || 'user',
+          content: m?.content || '',
+          enabled: m?.enabled !== false,
+          preview: !!previewByMessageId[m?.id],
+        })),
+        tools: (selectedPrompt.tools || []).map(t => ({
+          name: t?.name || 'toolName',
+          description: t?.description || '',
+          parameters: typeof t?.parameters === 'string' ? t.parameters : JSON.stringify(t?.parameters || { type: 'object', properties: {} }),
+          enabled: t?.enabled !== false,
+        })),
+      }
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      const base = (selectedPrompt.title || 'prompt').toLowerCase().replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '')
+      a.href = url
+      a.download = `${base || 'prompt'}.json`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      messageApi.success('JSON экспортирован')
+    } catch {
+      messageApi.error('Не удалось экспортировать JSON')
+    }
+  }
+
+  // Open file dialog for importing prompt JSON
+  function triggerImportJson() {
+    if (importInputRef.current) importInputRef.current.click()
+  }
+
+  // Handle JSON import from file
+  function onImportJsonChange(e) {
+    const file = e?.target?.files && e.target.files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const text = String(reader.result || '')
+        const data = JSON.parse(text)
+        const messages = Array.isArray(data?.messages) ? data.messages : []
+        const tools = Array.isArray(data?.tools) ? data.tools : []
+        const createdMessages = messages.map(m => ({
+          id: crypto.randomUUID(),
+          role: m?.role || 'user',
+          content: m?.content || '',
+          enabled: m?.enabled !== false,
+          __preview: !!m?.preview,
+        }))
+        const created = newPrompt({
+          title: (typeof data?.title === 'string' && data.title.trim()) ? data.title.trim() : 'Imported Prompt',
+          messages: createdMessages.map(({ __preview, ...rest }) => rest),
+          tools: tools.map(t => ({
+            name: t?.name || 'toolName',
+            description: t?.description || '',
+            parameters: typeof t?.parameters === 'string' ? t.parameters : JSON.stringify(t?.parameters || { type: 'object', properties: {} }),
+            enabled: t?.enabled !== false,
+          })),
+        })
+        // Persist preview state for this prompt before selecting it
+        try {
+          const previewMap = {}
+          for (const m of createdMessages) {
+            if (m.__preview) previewMap[m.id] = true
+          }
+          localStorage.setItem(`preview_state_${created.id}`, JSON.stringify(previewMap))
+        } catch {}
+        setPrompts(prev => [created, ...prev])
+        setSelectedId(created.id)
+        messageApi.success('Промпт импортирован')
+      } catch {
+        messageApi.error('Не удалось импортировать JSON')
+      } finally {
+        if (e?.target) e.target.value = ''
+      }
+    }
+    reader.onerror = () => {
+      messageApi.error('Ошибка чтения файла')
+      if (e?.target) e.target.value = ''
+    }
+    reader.readAsText(file)
   }
 
   function importSharedToMyPrompts() {
@@ -666,7 +761,15 @@ function App() {
               />
             </div>
             <div style={{ marginTop: 12 }} className="row">
-              <Button size="small" type="primary" onClick={addPrompt}>New Prompt</Button>
+              <Button size="small" type="primary" onClick={addPrompt}>New</Button>
+              <Button size="small" onClick={triggerImportJson}>Import</Button>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept="application/json"
+                onChange={onImportJsonChange}
+                style={{ display: 'none' }}
+              />
             </div>
             <div style={{ marginTop: 12 }}>
               <DragDropContext onDragEnd={onDragEndPrompts}>
@@ -771,7 +874,8 @@ function App() {
                   { value: 'gpt-3.5-turbo', label: 'gpt-3.5-turbo' },
                 ]}
               />
-              <Button onClick={copyPromptLink}>Copy prompt link</Button>
+              <Button onClick={copyPromptLink}>Share</Button>
+              <Button onClick={exportSelectedPromptAsJson} disabled={!selectedPrompt}>Export</Button>
             </div>
 
             <section>
@@ -946,7 +1050,7 @@ function App() {
                 <Alert type="error" showIcon style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }} message={runError} />
               )}
               <div className="panel" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {runMessages.length === 0 && <div style={{ color: 'var(--muted)' }}>Press Run to get a response from the model.</div>}
+                {runMessages.length === 0 && <div style={{ color: 'var(--muted)' }}>Press "Run" to get a response from the model.</div>}
                 {runMessages.map((m, idx) => (
                   <div key={m.id || idx} style={{ textAlign: 'left' }}>
                     {m.role !== 'assistant' && <div style={{ fontWeight: 600 }}>{m.role}</div>}
