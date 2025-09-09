@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
+import { ConfigProvider, Layout, Button, Input, Segmented, Typography, Space, Select, message, Switch, Checkbox, Collapse, Alert, Spin, App as AntApp, Popconfirm } from 'antd'
+import { theme as antdTheme } from 'antd'
+import { SunOutlined, MoonOutlined, CopyOutlined, DeleteOutlined, ExclamationCircleFilled, HolderOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
 import './App.css'
 
 function newPrompt(overrides = {}) {
@@ -24,6 +28,7 @@ function App() {
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem('theme') || 'dark' } catch { return 'dark' }
   })
+  const [messageApi, messageContextHolder] = message.useMessage()
 
   // load from localStorage once
   useEffect(() => {
@@ -129,11 +134,7 @@ function App() {
     setSelectedId(copy.id)
   }
 
-  async function deletePrompt(id) {
-    const prompt = prompts.find(p => p.id === id)
-    const title = prompt?.title || 'Untitled'
-    const ok = await showConfirm({ title: 'Удаление промпта', message: `Удалить промпт "${title}"? Это действие необратимо.`, confirmText: 'Удалить' })
-    if (!ok) return
+  function deletePrompt(id) {
     setPrompts(prev => prev.filter(p => p.id !== id))
     if (selectedId === id) setSelectedId(null)
   }
@@ -155,9 +156,7 @@ function App() {
     }))
   }
 
-  async function removeMessage(id) {
-    const ok = await showConfirm({ title: 'Удаление сообщения', message: 'Удалить сообщение?', confirmText: 'Удалить' })
-    if (!ok) return
+  function removeMessage(id) {
     updateSelected(p => ({ ...p, messages: p.messages.filter(m => m.id !== id) }))
   }
 
@@ -174,14 +173,40 @@ function App() {
     })
   }
 
-  async function removeTool(index) {
-    const ok = await showConfirm({ title: 'Удаление tool', message: 'Удалить tool?', confirmText: 'Удалить' })
-    if (!ok) return
+  function removeTool(index) {
     updateSelected(p => {
       const tools = [...(p.tools || [])]
       tools.splice(index, 1)
       return { ...p, tools }
     })
+  }
+
+  // --- DnD: prompts list reordering ---
+  function reorder(list, startIndex, endIndex) {
+    const result = Array.from(list)
+    const [removed] = result.splice(startIndex, 1)
+    result.splice(endIndex, 0, removed)
+    return result
+  }
+
+  function onDragEndPrompts(result) {
+    const { source, destination } = result || {}
+    if (!destination) return
+    if (source.index === destination.index) return
+    setPrompts(prev => reorder(prev, source.index, destination.index))
+  }
+
+  // --- DnD: messages reordering (handle-only) ---
+  function onDragEndMessages(result) {
+    const { source, destination } = result || {}
+    if (!destination) return
+    if (source.index === destination.index) return
+    setPrompts(prev => prev.map(p => {
+      if (p.id !== selectedId) return p
+      const base = Array.isArray(p.messages) ? p.messages : []
+      const next = reorder(base, source.index, destination.index)
+      return { ...p, messages: next }
+    }))
   }
 
   // --- Export / Import helpers ---
@@ -221,9 +246,11 @@ function App() {
     const url = `${window.location.origin}${window.location.pathname}#share=${encodeURIComponent(b64)}`
     try {
       await navigator.clipboard.writeText(url)
+      messageApi.success('Prompt link copied')
       setCopyNotice('Prompt link copied')
       setTimeout(() => setCopyNotice(''), 1500)
     } catch {
+      messageApi.error('Copy failed')
       setCopyNotice('Copy failed')
       setTimeout(() => setCopyNotice(''), 1500)
     }
@@ -325,9 +352,7 @@ function App() {
     })
   }
 
-  async function removeParam(index, fieldIndex) {
-    const ok = await showConfirm({ title: 'Удаление параметра', message: 'Удалить параметр?', confirmText: 'Удалить' })
-    if (!ok) return
+  function removeParam(index, fieldIndex) {
     updateSelected(p => {
       const tools = [...(p.tools || [])]
       const t = { ...(tools[index] || {}) }
@@ -345,18 +370,6 @@ function App() {
   const [isRunning, setIsRunning] = useState(false)
   const [runError, setRunError] = useState('')
   const [previewByMessageId, setPreviewByMessageId] = useState({})
-  const [confirmData, setConfirmData] = useState(null) // {title, message, confirmText, cancelText, resolve}
-
-  function showConfirm(options) {
-    const defaults = { title: 'Подтверждение', message: '', confirmText: 'Удалить', cancelText: 'Отмена' }
-    return new Promise(resolve => {
-      setConfirmData({ ...defaults, ...options, resolve })
-    })
-  }
-
-  function resolveConfirm(result) {
-    try { confirmData?.resolve?.(result) } finally { setConfirmData(null) }
-  }
 
   useEffect(() => {
     if (selectedPrompt) {
@@ -483,7 +496,7 @@ function App() {
     }
   }
 
-  async function runOnce() {
+  async function runPrompt() {
     if (!selectedPrompt) return
     setIsRunning(true)
     try {
@@ -497,6 +510,7 @@ function App() {
       if (assistant) setRunMessages(prev => [...prev, assistant])
     } finally {
       setIsRunning(false)
+      messageApi.success('Prompt run completed')
     }
   }
 
@@ -538,22 +552,25 @@ function App() {
       }
     }
     if (!contentToSave) return
-    updateSelected(p => ({ ...p, messages: [...p.messages, { id: crypto.randomUUID(), role: 'assistant', content: contentToSave }] }))
+    updateSelected(p => ({ ...p, messages: [...p.messages, { id: crypto.randomUUID(), role: 'comment', content: contentToSave }] }))
   }
 
   // Read-only view for shared links
   if (sharedPreview) {
     return (
       <div style={{ height: '100vh', padding: 16 }} className="scrolly">
+        {messageContextHolder}
         <div className="panel" style={{ maxWidth: 960, margin: '0 auto' }}>
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <h2 style={{ margin: 0 }}>Shared Prompt</h2>
-            <span className="select">
-              <select value={theme} onChange={e => setTheme(e.target.value)}>
-                <option value="dark">Dark</option>
-                <option value="light">Light</option>
-              </select>
-            </span>
+            <Segmented
+              value={theme}
+              onChange={val => setTheme(val)}
+              options={[
+                { label: <SunOutlined />, value: 'light' },
+                { label: <MoonOutlined />, value: 'dark' },
+              ]}
+            />
           </div>
           <div className="col" style={{ marginTop: 12 }}>
             <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
@@ -602,7 +619,7 @@ function App() {
                 </div>
               </div>
             )}
-            {sharedPreview.kind !== 'run' && (
+            {sharedPreview.kind !== 'run' && Array.isArray(sharedPreview.tools) && sharedPreview.tools.length > 0 && (
               <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                 <strong>Tools</strong>
                 <div className="col" style={{ marginTop: 8 }}>
@@ -626,47 +643,84 @@ function App() {
   }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', height: '100vh' }}>
-      <aside style={{ borderRight: '1px solid var(--panel-border)', padding: '12px', overflow: 'auto' }} className="scrolly">
-        <h2 style={{ marginTop: 0 }}>Prompt IDE</h2>
-        <div className="row">
-          <input
-            type="password"
-            placeholder="OpenAI API Key"
-            value={apiKey}
-            onChange={e => setApiKey(e.target.value)}
-            style={{ flex: 1 }}
-          />
-          <span className="select">
-            <select value={theme} onChange={e => setTheme(e.target.value)}>
-              <option value="dark">Dark</option>
-              <option value="light">Light</option>
-            </select>
-          </span>
-        </div>
-        <div style={{ marginTop: 12 }} className="row">
-          <button className="btn primary" onClick={addPrompt}>New Prompt</button>
-        </div>
-        <div style={{ marginTop: 12, gap: 6 }} className="col">
-          {prompts.map(p => (
-            <div key={p.id} className="panel" style={{ background: selectedId === p.id ? 'var(--selected-bg)' : 'var(--panel)' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 8, alignItems: 'center' }}>
-                <button
-                  className="btn ghost"
-                  onClick={() => setSelectedId(p.id)}
-                  style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                  title={p.title || 'Untitled'}
-                >
-                  {p.title || 'Untitled'}
-                </button>
-                <button className="btn ghost" onClick={() => duplicatePrompt(p.id)} title="Duplicate">⎘</button>
-                <button className="btn danger" onClick={() => deletePrompt(p.id)} title="Delete">✕</button>
-              </div>
+    <ConfigProvider theme={{ algorithm: theme === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm }}>
+      <AntApp>
+      {messageContextHolder}
+      <Layout style={{ height: '100vh' }}>
+        <Layout.Sider width={280} style={{ background: 'transparent', borderRight: '1px solid var(--panel-border)' }}>
+          <div style={{ padding: 12 }} className="scrolly">
+            <Typography.Title level={4} style={{ marginTop: 0, color: 'var(--text)' }}>Prompt IDE</Typography.Title>
+            <div className="row">
+              <Input.Password
+                placeholder="OpenAI API Key"
+                value={apiKey}
+                onChange={e => setApiKey(e.target.value)}
+              />
+              <Segmented
+                value={theme}
+                onChange={val => setTheme(val)}
+                options={[
+                  { label: <SunOutlined />, value: 'light' },
+                  { label: <MoonOutlined />, value: 'dark' },
+                ]}
+              />
             </div>
-          ))}
-        </div>
-      </aside>
-      <main style={{ padding: '16px', overflow: 'auto' }} className="scrolly">
+            <div style={{ marginTop: 12 }} className="row">
+              <Button size="small" type="primary" onClick={addPrompt}>New Prompt</Button>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <DragDropContext onDragEnd={onDragEndPrompts}>
+                <Droppable droppableId="prompts">
+                  {(dropProvided) => (
+                    <div ref={dropProvided.innerRef} {...dropProvided.droppableProps}>
+                      {prompts.map((p, index) => (
+                        <Draggable key={p.id} draggableId={p.id} index={index}>
+                          {(dragProvided) => (
+                            <div
+                              ref={dragProvided.innerRef}
+                              {...dragProvided.draggableProps}
+                              {...dragProvided.dragHandleProps}
+                              className="prompt-item"
+                              style={{
+                                padding: 8,
+                                marginBottom: 8,
+                                background: selectedId === p.id ? 'var(--selected-bg)' : undefined,
+                                borderRadius: 8,
+                                border: '1px solid var(--panel-border)',
+                                cursor: 'grab',
+                                ...dragProvided.draggableProps.style,
+                              }}
+                              onClick={() => setSelectedId(p.id)}
+                            >
+                              <div className="row" style={{ justifyContent: 'space-between' }}>
+                                <span className="truncate">{p.title || 'Untitled'}</span>
+                                <div className="row" onClick={e => e.stopPropagation()}>
+                                  <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => duplicatePrompt(p.id)} title="Duplicate" />
+                                  <Popconfirm
+                                    title="Удалить промпт?"
+                                    description={`Удалить "${p.title || 'Untitled'}"? Это действие необратимо.`}
+                                    okText="Удалить"
+                                    cancelText="Отмена"
+                                    onConfirm={() => deletePrompt(p.id)}
+                                  >
+                                    <Button size="small" danger type="text" icon={<DeleteOutlined />} title="Delete" />
+                                  </Popconfirm>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </Draggable>
+                      ))}
+                      {dropProvided.placeholder}
+                    </div>
+                  )}
+                </Droppable>
+              </DragDropContext>
+            </div>
+          </div>
+        </Layout.Sider>
+        <Layout>
+          <Layout.Content style={{ padding: 16 }} className="scrolly">
         {!selectedPrompt ? (
       <div>
             {sharedPreview ? (
@@ -675,7 +729,7 @@ function App() {
                   <strong>Shared Prompt Preview</strong>
                 </div>
                 <div className="col">
-                  <input value={sharedPreview.title || ''} readOnly />
+                  <Input value={sharedPreview.title || ''} readOnly />
                   <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                     <strong>Messages</strong>
                     <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(sharedPreview.messages || [], null, 2)}</pre>
@@ -686,8 +740,8 @@ function App() {
                   </div>
                 </div>
                 <div className="row" style={{ marginTop: 8 }}>
-                  <button className="btn primary" onClick={importSharedToMyPrompts}>Import to my prompts</button>
-                  <button className="btn ghost" onClick={clearSharePreview}>Close preview</button>
+                  <Button size="small" type="primary" onClick={importSharedToMyPrompts}>Import to my prompts</Button>
+                  <Button size="small" onClick={clearSharePreview}>Close preview</Button>
                 </div>
               </div>
             ) : (
@@ -697,131 +751,173 @@ function App() {
         ) : (
           <div style={{ display: 'grid', gridTemplateRows: 'auto auto 1fr', gap: 12, height: '100%' }}>
             <div className="row">
-              <input
+              <Input
                 value={selectedPrompt.title}
                 onChange={e => updateSelected(p => ({ ...p, title: e.target.value }))}
                 placeholder="Prompt title"
                 style={{ flex: 1 }}
               />
-              <span className="select">
-                <select value={model} onChange={e => setModel(e.target.value)}>
-                  <option value="gpt-4o-mini">gpt-4o-mini</option>
-                  <option value="gpt-4o">gpt-4o</option>
-                  <option value="o4-mini">o4-mini</option>
-                  <option value="o3-mini">o3-mini</option>
-                  <option value="gpt-4.1">gpt-4.1</option>
-                  <option value="gpt-4.1-mini">gpt-4.1-mini</option>
-                  <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
-                </select>
-              </span>
-              <button className="btn ghost" onClick={copyPromptLink}>Copy prompt link</button>
-              {copyNotice && <span style={{ color: 'var(--muted)' }}>{copyNotice}</span>}
+              <Select
+                value={model}
+                onChange={setModel}
+                style={{ width: 180 }}
+                options={[
+                  { value: 'gpt-4o-mini', label: 'gpt-4o-mini' },
+                  { value: 'gpt-4o', label: 'gpt-4o' },
+                  { value: 'o4-mini', label: 'o4-mini' },
+                  { value: 'o3-mini', label: 'o3-mini' },
+                  { value: 'gpt-4.1', label: 'gpt-4.1' },
+                  { value: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
+                  { value: 'gpt-3.5-turbo', label: 'gpt-3.5-turbo' },
+                ]}
+              />
+              <Button onClick={copyPromptLink}>Copy prompt link</Button>
             </div>
 
             <section>
               <div className="row" style={{ marginBottom: 8 }}>
                 <strong>Messages</strong>
       </div>
-              <div className="col">
-                {selectedPrompt.messages.map(m => (
-                  <div key={m.id} className="panel" style={{ opacity: m.enabled !== false ? 1 : 0.5 }}>
-                    <div className="row" style={{ marginBottom: 6 }}>
-                      <span className="select">
-                        <select value={m.role} onChange={e => updateMessage(m.id, { role: e.target.value })}>
-                          <option value="system">system</option>
-                          <option value="user">user</option>
-                          <option value="assistant">assistant</option>
-                          <option value="comment">comment</option>
-                        </select>
-                      </span>
-                      <button className="btn ghost" onClick={() => setPreviewByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
-                        {previewByMessageId[m.id] ? 'Edit' : 'Preview'}
-        </button>
-                      <button
-                        className={`toggle ${m.enabled !== false ? 'on' : ''}`}
-                        onClick={() => updateMessage(m.id, { enabled: !(m.enabled !== false) })}
-                        title={m.enabled !== false ? 'Disable' : 'Enable'}
-                      >
-                        <span className="toggle-thumb" />
-                      </button>
-                      <button className="btn danger" onClick={() => removeMessage(m.id)}>Delete</button>
+              <DragDropContext onDragEnd={onDragEndMessages}>
+                <Droppable droppableId={`messages-${selectedId || 'none'}`}>
+                  {(dropProvided) => (
+                    <div className="col" ref={dropProvided.innerRef} {...dropProvided.droppableProps}>
+                      {selectedPrompt.messages.map((m, index) => (
+                        <Draggable key={m.id} draggableId={m.id} index={index}>
+                          {(dragProvided) => (
+                            <div
+                              ref={dragProvided.innerRef}
+                              {...dragProvided.draggableProps}
+                              className="panel"
+                              style={{ opacity: m.enabled !== false ? 1 : 0.5, ...dragProvided.draggableProps.style }}
+                            >
+                              <div className="row" style={{ marginBottom: 6 }}>
+                                <span
+                                  {...dragProvided.dragHandleProps}
+                                  title="Drag to reorder"
+                                  style={{ display: 'inline-flex', alignItems: 'center', cursor: 'grab', color: 'var(--muted)' }}
+                                >
+                                  <HolderOutlined />
+                                </span>
+                                <Select
+                                  size="small"
+                                  value={m.role}
+                                  onChange={val => updateMessage(m.id, { role: val })}
+                                  style={{ width: 140 }}
+                                  options={[
+                                    { value: 'system', label: 'system' },
+                                    { value: 'user', label: 'user' },
+                                    { value: 'assistant', label: 'assistant' },
+                                    { value: 'comment', label: 'comment' },
+                                  ]}
+                                />
+                                <Button size="small" onClick={() => setPreviewByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
+                                  {previewByMessageId[m.id] ? 'Edit' : 'Preview'}
+                                </Button>
+                                <Switch
+                                  size="small"
+                                  checked={m.enabled !== false}
+                                  onChange={val => updateMessage(m.id, { enabled: val })}
+                                />
+                                <Popconfirm
+                                  title="Удалить сообщение?"
+                                  okText="Удалить"
+                                  cancelText="Отмена"
+                                  onConfirm={() => removeMessage(m.id)}
+                                >
+                                  <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
+                                </Popconfirm>
+                              </div>
+                              {previewByMessageId[m.id] ? (
+                                <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
+                                  <Typography.Paragraph>
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
+                                  </Typography.Paragraph>
+                                </div>
+                              ) : (
+                                <Input.TextArea
+                                  value={m.content}
+                                  onChange={e => updateMessage(m.id, { content: e.target.value })}
+                                  rows={8}
+                                  placeholder="Message content (Markdown supported)"
+                                />
+                              )}
+                            </div>
+                          )}
+                        </Draggable>
+                      ))}
+                      {dropProvided.placeholder}
                     </div>
-                    {previewByMessageId[m.id] ? (
-                      <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
-                      </div>
-                    ) : (
-                      <textarea
-                        value={m.content}
-                        onChange={e => updateMessage(m.id, { content: e.target.value })}
-                        rows={8}
-                        placeholder="Message content (Markdown supported)"
-                      />
-                    )}
-                  </div>
-                ))}
-              </div>
+                  )}
+                </Droppable>
+              </DragDropContext>
               <div className="row" style={{ marginTop: 8 }}>
-                <button className="btn ghost" onClick={() => addMessage('system')}>+ system</button>
-                <button className="btn ghost" onClick={() => addMessage('user')}>+ user</button>
-                <button className="btn ghost" onClick={() => addMessage('assistant')}>+ assistant</button>
-                <button className="btn ghost" onClick={() => addMessage('comment')}>+ comment</button>
+                <Button size="small" onClick={() => addMessage('system')}>+ system</Button>
+                <Button size="small" onClick={() => addMessage('user')}>+ user</Button>
+                <Button size="small" onClick={() => addMessage('assistant')}>+ assistant</Button>
+                <Button size="small" onClick={() => addMessage('comment')}>+ comment</Button>
               </div>
             </section>
 
             <section>
               <div className="row" style={{ marginTop: 12, marginBottom: 8 }}>
                 <strong>Tools</strong>
-                <button className="btn ghost" onClick={addTool}>+ tool</button>
+                <Button size="small" onClick={addTool}>+ tool</Button>
               </div>
               <div className="col">
                 {(selectedPrompt.tools || []).map((t, i) => (
                   <div key={i} className="panel" style={{ opacity: t.enabled !== false ? 1 : 0.5 }}>
                     <div className="row" style={{ marginBottom: 6 }}>
-                      <input value={t.name} onChange={e => updateTool(i, { name: e.target.value })} placeholder="Tool name" />
-                      <button
-                        className={`toggle ${t.enabled !== false ? 'on' : ''}`}
-                        onClick={() => updateTool(i, { enabled: !(t.enabled !== false) })}
-                        title={t.enabled !== false ? 'Disable' : 'Enable'}
+                      <Input value={t.name} onChange={e => updateTool(i, { name: e.target.value })} placeholder="Tool name" />
+                      <Switch size="small" checked={t.enabled !== false} onChange={val => updateTool(i, { enabled: val })} />
+                      <Popconfirm
+                        title="Удалить tool?"
+                        okText="Удалить"
+                        cancelText="Отмена"
+                        onConfirm={() => removeTool(i)}
                       >
-                        <span className="toggle-thumb" />
-                      </button>
-                      <button className="btn danger" onClick={() => removeTool(i)}>Delete</button>
+                        <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
+                      </Popconfirm>
                     </div>
-                    <input value={t.description} onChange={e => updateTool(i, { description: e.target.value })} placeholder="Description" />
+                    <Input value={t.description} onChange={e => updateTool(i, { description: e.target.value })} placeholder="Description" />
                     <div style={{ marginTop: 8, borderTop: '1px dashed var(--panel-border)', paddingTop: 8 }}>
                       <div className="row" style={{ marginBottom: 6 }}>
                         <strong>Parameters</strong>
-                        <button className="btn ghost" onClick={() => addParam(i)}>+ parameter</button>
+                        <Button size="small" onClick={() => addParam(i)}>+ parameter</Button>
                       </div>
                       <div className="col">
                         {parseParamsToFields(t.parameters || '').map((f, fi) => (
                           <div key={fi} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 100px 80px', gap: 8, alignItems: 'center' }}>
-                              <input
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 140px 80px', gap: 8, alignItems: 'center' }}>
+                              <Input
                                 value={f.key}
                                 onChange={e => updateParam(i, fi, { key: e.target.value })}
                                 placeholder="name"
                               />
-                              <span className="select">
-                                <select value={f.type} onChange={e => updateParam(i, fi, { type: e.target.value })}>
-                                  <option value="string">string</option>
-                                  <option value="number">number</option>
-                                  <option value="integer">integer</option>
-                                  <option value="boolean">boolean</option>
-                                </select>
-                              </span>
-                              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <input
-                                  type="checkbox"
-                                  checked={!!f.required}
-                                  onChange={e => updateParam(i, fi, { required: e.target.checked })}
-                                />
-                                required
-                              </label>
-                              <button className="btn danger" onClick={() => removeParam(i, fi)}>Delete</button>
+                              <Select
+                                value={f.type}
+                                onChange={val => updateParam(i, fi, { type: val })}
+                                options={[
+                                  { value: 'string', label: 'string' },
+                                  { value: 'number', label: 'number' },
+                                  { value: 'integer', label: 'integer' },
+                                  { value: 'boolean', label: 'boolean' },
+                                ]}
+                              />
+                              <Checkbox
+                                checked={!!f.required}
+                                onChange={e => updateParam(i, fi, { required: e.target.checked })}
+                              >required</Checkbox>
+                              <Popconfirm
+                                title="Удалить параметр?"
+                                okText="Удалить"
+                                cancelText="Отмена"
+                                onConfirm={() => removeParam(i, fi)}
+                              >
+                                <Button type="text" size="small" danger icon={<DeleteOutlined />} title="Delete" />
+                              </Popconfirm>
                             </div>
-                            <input
+                            <Input
                               value={f.description}
                               onChange={e => updateParam(i, fi, { description: e.target.value })}
                               placeholder="description"
@@ -830,10 +926,11 @@ function App() {
                           </div>
                         ))}
                       </div>
-                      <details style={{ marginTop: 8 }}>
-                        <summary>Advanced (view JSON schema)</summary>
-                        <pre style={{ whiteSpace: 'pre-wrap' }}>{t.parameters || ''}</pre>
-                      </details>
+                      <Collapse style={{ marginTop: 8 }}>
+                        <Collapse.Panel header="Advanced (view JSON schema)" key="1">
+                          <pre style={{ whiteSpace: 'pre-wrap' }}>{t.parameters || ''}</pre>
+                        </Collapse.Panel>
+                      </Collapse>
                     </div>
                   </div>
                 ))}
@@ -842,12 +939,11 @@ function App() {
 
             <section style={{ marginTop: 12, paddingBottom: 24 }}>
               <div className="row" style={{ marginBottom: 8 }}>
-                <strong>Chat</strong>
-                <button className="btn primary" onClick={runOnce} disabled={isRunning}>Run</button>
-                {isRunning && <span className="spinner" />}
+                <Button size="small" type="primary" onClick={runPrompt} disabled={isRunning}>Run</Button>
+                {isRunning && <Spin size="small" />}
               </div>
               {runError && (
-                <div style={{ whiteSpace: 'pre-wrap', color: 'var(--danger-contrast)', background: 'var(--danger-bg)', border: '1px solid var(--danger-border)', padding: 8, borderRadius: 6, marginBottom: 8 }}>{runError}</div>
+                <Alert type="error" showIcon style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }} message={runError} />
               )}
               <div className="panel" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {runMessages.length === 0 && <div style={{ color: 'var(--muted)' }}>Press Run to get a response from the model.</div>}
@@ -857,7 +953,11 @@ function App() {
                     {m.loading ? (
                       <div className="panel shimmer" style={{ height: 56, borderColor: 'var(--panel-border)' }} />
                     ) : (
-                      m.content && <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
+                      m.content && (
+                        <Typography.Paragraph>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
+                        </Typography.Paragraph>
+                      )
                     )}
                     {Array.isArray(m.tool_calls) && m.tool_calls.length > 0 && (
                       <div style={{ marginTop: 6 }}>
@@ -875,7 +975,7 @@ function App() {
                     )}
                     {m.role === 'assistant' && (
                       <div style={{ marginTop: 6 }}>
-                        <button onClick={() => saveAssistantToPrompt(idx)}>Save to prompt</button>
+                        <Button size="small" onClick={() => saveAssistantToPrompt(idx)} disabled={isRunning}>Add to prompt</Button>
                       </div>
                     )}
                   </div>
@@ -884,20 +984,11 @@ function App() {
             </section>
           </div>
         )}
-      </main>
-      {confirmData && (
-        <div className="modal-backdrop" onClick={() => resolveConfirm(false)}>
-          <div className="modal-panel" onClick={e => e.stopPropagation()}>
-            <div className="modal-title">{confirmData.title}</div>
-            {confirmData.message && <div style={{ color: 'var(--muted)' }}>{confirmData.message}</div>}
-            <div className="modal-actions">
-              <button className="btn ghost" onClick={() => resolveConfirm(false)}>{confirmData.cancelText || 'Отмена'}</button>
-              <button className="btn danger" onClick={() => resolveConfirm(true)}>{confirmData.confirmText || 'Удалить'}</button>
-            </div>
-          </div>
-        </div>
-      )}
-      </div>
+          </Layout.Content>
+        </Layout>
+      </Layout>
+      </AntApp>
+    </ConfigProvider>
   )
 }
 

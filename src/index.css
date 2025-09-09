@@ -61,7 +61,8 @@ h1 {
   line-height: 1.1;
 }
 
-button, input, textarea, select {
+/* legacy form styles disabled to avoid conflicts with antd components */
+/* button, input, textarea, select {
   border-radius: 8px;
   border: 1px solid var(--panel-border);
   padding: 6px 12px;
@@ -82,7 +83,7 @@ input:focus,
 textarea:focus,
 select:focus {
   outline: 4px auto -webkit-focus-ring-color;
-}
+} */
 
 /* Theme switch (light overrides via data-theme) */
 [data-theme="light"] {
@@ -123,6 +124,7 @@ main, aside {
 }
 
 /* Consistent form styling for inputs/textareas */
+/* legacy input sizing retained only for plain elements still used */
 input, textarea, select {
   box-sizing: border-box;
   width: 100%;
@@ -178,6 +180,15 @@ textarea {
   text-overflow: ellipsis;
 }
 
+/* Prompt list item hover + spacing */
+.prompt-item {
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.prompt-item:hover {
+  background-color: var(--selected-bg);
+  border-color: var(--accent);
+}
+
 /* Loading animations */
 .spinner {
   width: 16px;
@@ -199,83 +210,15 @@ textarea {
   background-size: 200% 100%;
   animation: shimmer 1.2s ease-in-out infinite;
 }
-/* Confirm modal */
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: var(--backdrop);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-.modal-panel {
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: 12px;
-  padding: 16px;
-  width: min(520px, 92vw);
-  box-shadow: 0 10px 30px var(--modal-shadow-color);
-}
-.modal-title { font-weight: 700; margin: 0 0 8px 0; }
-.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+/* removed legacy confirm modal styles (antd Modal is used) */
 
 @keyframes shimmer {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
 
-/* Buttons */
-.btn { color: var(--text); }
-.btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.btn.primary:disabled { color: var(--button-on-primary-disabled); }
-button:disabled { opacity: 0.6; cursor: not-allowed; }
-.btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-color: transparent; color: var(--button-on-primary); }
-.btn.primary:hover { filter: brightness(1.05); }
-.btn.danger { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger-contrast); }
-.btn.danger:hover { border-color: var(--danger); }
-.btn.ghost { background: transparent; }
+/* removed legacy .btn styles (antd Buttons are used) */
 
-/* Toggle switch */
-.toggle {
-  position: relative;
-  width: 36px;
-  height: 22px;
-  border-radius: 9999px;
-  background: var(--toggle-off);
-  border: 1px solid var(--panel-border);
-  display: inline-flex;
-  align-items: center;
-  padding: 0;
-  transition: background 0.2s ease, border-color 0.2s ease;
-}
-.toggle .toggle-thumb {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--toggle-thumb);
-  transform: translateX(2px);
-  transition: transform 0.2s ease;
-}
-.toggle.on { background: var(--toggle-on); border-color: transparent; }
-.toggle.on .toggle-thumb { transform: translateX(16px); }
+/* removed legacy toggle styles (antd Switch is used) */
 
-/* Custom select */
-.select {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-.select select {
-  appearance: none;
-  -moz-appearance: none;
-  -webkit-appearance: none;
-  padding-right: 2.2em;
-}
-.select::after {
-  content: '▾';
-  position: absolute;
-  right: 10px;
-  pointer-events: none;
-  color: var(--muted);
-}
+/* removed legacy custom select caret (antd Select is used) */
