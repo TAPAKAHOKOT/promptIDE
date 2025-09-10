@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ConfigProvider, Layout, Button, Input, Segmented, Typography, Space, Select, message, Switch, Checkbox, Collapse, Alert, Spin, FloatButton, App as AntApp, Popconfirm } from 'antd'
 import { theme as antdTheme } from 'antd'
-import { SunOutlined, MoonOutlined, CopyOutlined, DeleteOutlined, HolderOutlined, DownOutlined, RightOutlined, MenuOutlined, CloseOutlined } from '@ant-design/icons'
+import { SunOutlined, MoonOutlined, CopyOutlined, DeleteOutlined, HolderOutlined, DownOutlined, RightOutlined, MenuOutlined, CloseOutlined, CommentOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
@@ -542,9 +542,9 @@ function App() {
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
-      messageApi.success('JSON экспортирован')
+      messageApi.success('JSON exported successfully')
     } catch {
-      messageApi.error('Не удалось экспортировать JSON')
+      messageApi.error('Failed to export JSON')
     }
   }
 
@@ -594,9 +594,9 @@ function App() {
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
-      messageApi.success('Backup exported')
+      messageApi.success('Backup exported successfully')
     } catch {
-      messageApi.error('Failed to export backup')
+      messageApi.error('Failed to export backup successfully')
     }
   }
 
@@ -697,15 +697,15 @@ function App() {
         } catch {}
         setPrompts(prev => [created, ...prev])
         setSelectedId(created.id)
-        messageApi.success('Промпт импортирован')
+        messageApi.success('Prompt imported successfully')
       } catch {
-        messageApi.error('Не удалось импортировать JSON')
+        messageApi.error('Failed to import JSON')
       } finally {
         if (e?.target) e.target.value = ''
       }
     }
     reader.onerror = () => {
-      messageApi.error('Ошибка чтения файла')
+      messageApi.error('File reading error')
       if (e?.target) e.target.value = ''
     }
     reader.readAsText(file)
@@ -930,7 +930,7 @@ function App() {
 
   async function callOpenAI(messages) {
     if (!apiKey) {
-      setRunError('Введите OpenAI API Key в сайдбаре')
+      setRunError('Enter OpenAI API Key in the sidebar')
       return null
     }
     setRunError('')
@@ -963,7 +963,7 @@ function App() {
       const data = await res.json()
       const choice = data.choices && data.choices[0]
       const msg = choice?.message
-      if (!msg) throw new Error('Пустой ответ от модели')
+      if (!msg) throw new Error('Empty response from model')
       // Normalize assistant message
       return {
         id: crypto.randomUUID(),
@@ -972,7 +972,7 @@ function App() {
         tool_calls: msg.tool_calls || [],
       }
     } catch (e) {
-      const hint = 'Замечание: ключ на фронте небезопасен, а CORS может блокировать запросы. При проблемах используйте прокси/бэкенд.'
+      const hint = 'Note: the key is unsafe on the frontend, and CORS may block requests. Use a proxy/backend if you have problems.'
       setRunError(`${e.message}\n${hint}`)
       return null
     }
@@ -992,7 +992,7 @@ function App() {
       if (assistant) setRunMessages(prev => [...prev, assistant])
     } finally {
       setIsRunning(false)
-      messageApi.success('Prompt run completed')
+      messageApi.success('Prompt run completed successfully')
     }
   }
 
@@ -1241,10 +1241,10 @@ function App() {
                                 <div className="row" onClick={e => e.stopPropagation()}>
                                   <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => duplicatePrompt(p.id)} title="Duplicate" />
                                   <Popconfirm
-                                    title="Удалить промпт?"
-                                    description={`Удалить "${p.title || 'Untitled'}"? Это действие необратимо.`}
-                                    okText="Удалить"
-                                    cancelText="Отмена"
+                                    title="Delete prompt?"
+                                    description={`Delete "${p.title || 'Untitled'}"? This action is irreversible.`}
+                                    okText="Delete"
+                                    cancelText="Cancel"
                                     onConfirm={() => deletePrompt(p.id)}
                                   >
                                     <Button size="small" danger type="text" icon={<DeleteOutlined />} title="Delete" />
@@ -1266,14 +1266,15 @@ function App() {
               <div className="row">
                 <Button size="small" onClick={exportBackup}>Backup</Button>
                 <Popconfirm
-                  title="Восстановить из резервной копии?"
-                  description="Все текущие промпты будут утеряны. Продолжить?"
-                  okText="Восстановить"
-                  cancelText="Отмена"
+                  title="Restore from backup?"
+                  description="All current prompts will be lost. Continue?"
+                  okText="Restore"
+                  cancelText="Cancel"
                   onConfirm={triggerImportBackup}
                 >
                   <Button size="small">Restore</Button>
                 </Popconfirm>
+                <Button size="small" href="https://t.me/tapakahokot" target="_blank" type="text" icon={<CommentOutlined />} />
               </div>
               <input
                 ref={backupInputRef}
@@ -1439,9 +1440,9 @@ function App() {
                                   onChange={val => updateMessage(m.id, { enabled: val })}
                                 />
                                 <Popconfirm
-                                  title="Удалить сообщение?"
-                                  okText="Удалить"
-                                  cancelText="Отмена"
+                                  title="Delete message?"
+                                  okText="Delete"
+                                  cancelText="Cancel"
                                   onConfirm={() => removeMessage(m.id)}
                                 >
                                   <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
@@ -1509,9 +1510,9 @@ function App() {
                           <Input value={t.name} onChange={e => updateTool(i, { name: e.target.value })} placeholder="Tool name" />
                           <Switch size="small" checked={t.enabled !== false} onChange={val => updateTool(i, { enabled: val })} />
                           <Popconfirm
-                            title="Удалить tool?"
-                            okText="Удалить"
-                            cancelText="Отмена"
+                            title="Delete tool?"
+                            okText="Delete"
+                            cancelText="Cancel"
                             onConfirm={() => removeTool(i)}
                           >
                             <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
@@ -1547,9 +1548,9 @@ function App() {
                                     onChange={e => updateParam(i, fi, { required: e.target.checked })}
                                   >required</Checkbox>
                                   <Popconfirm
-                                    title="Удалить параметр?"
-                                    okText="Удалить"
-                                    cancelText="Отмена"
+                                    title="Delete parameter?"
+                                    okText="Delete"
+                                    cancelText="Cancel"
                                     onConfirm={() => removeParam(i, fi)}
                                   >
                                     <Button type="text" size="small" danger icon={<DeleteOutlined />} title="Delete" />
