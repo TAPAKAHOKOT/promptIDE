@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ConfigProvider, Layout, Button, Input, Segmented, Typography, Space, Select, message, Switch, Checkbox, Collapse, Alert, Spin, App as AntApp, Popconfirm } from 'antd'
+import { ConfigProvider, Layout, Button, Input, Segmented, Typography, Space, Select, message, Switch, Checkbox, Collapse, Alert, Spin, FloatButton, App as AntApp, Popconfirm } from 'antd'
 import { theme as antdTheme } from 'antd'
 import { SunOutlined, MoonOutlined, CopyOutlined, DeleteOutlined, HolderOutlined, DownOutlined, RightOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
@@ -32,6 +32,8 @@ function App() {
   })
   const [messageApi, messageContextHolder] = message.useMessage()
   const importInputRef = useRef(null)
+  const backupInputRef = useRef(null)
+  const contentRef = useRef(null)
 
   // load from localStorage once
   useEffect(() => {
@@ -49,6 +51,21 @@ function App() {
     } finally {
       setIsLoaded(true)
     }
+  }, [])
+
+  // Try to request persistent storage to reduce risk of localStorage eviction
+  useEffect(() => {
+    try {
+      if (navigator && navigator.storage && navigator.storage.persist) {
+        navigator.storage.persisted().then((persisted) => {
+          if (!persisted) {
+            navigator.storage.persist().then((granted) => {
+              if (granted) messageApi.success('Persistent storage enabled')
+            }).catch(() => {})
+          }
+        }).catch(() => {})
+      }
+    } catch {}
   }, [])
 
   // Detect shared prompt via URL (#id=... or #share=...)
@@ -494,6 +511,101 @@ function App() {
     } catch {
       messageApi.error('Не удалось экспортировать JSON')
     }
+  }
+
+  // --- Full backup/restore (entire workspace) ---
+  function exportBackup() {
+    try {
+      const perPromptUi = {}
+      for (const p of prompts) {
+        const pid = p?.id
+        if (!pid) continue
+        let preview = {}
+        let collapsed = {}
+        let run = []
+        let input = ''
+        let toolsOpen = getToolsPanelDefault(pid)
+        try { preview = JSON.parse(localStorage.getItem(`preview_state_${pid}`) || '{}') || {} } catch {}
+        try { collapsed = JSON.parse(localStorage.getItem(`collapsed_state_${pid}`) || '{}') || {} } catch {}
+        try { run = JSON.parse(localStorage.getItem(`run_messages_${pid}`) || '[]') || [] } catch {}
+        try { input = localStorage.getItem(`chat_input_${pid}`) || '' } catch {}
+        perPromptUi[pid] = {
+          preview,
+          collapsed,
+          toolsPanelOpen: !!toolsOpen,
+          runMessages: Array.isArray(run) ? run : [],
+          chatInput: input,
+        }
+      }
+      const payload = {
+        kind: 'prompt-ide-backup',
+        version: 1,
+        createdAt: new Date().toISOString(),
+        data: {
+          // apiKey intentionally excluded for safety
+          prompts,
+          selectedId,
+          model,
+          theme,
+          perPromptUi,
+        }
+      }
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `prompt-ide-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      messageApi.success('Backup exported')
+    } catch {
+      messageApi.error('Failed to export backup')
+    }
+  }
+
+  function triggerImportBackup() {
+    if (backupInputRef.current) backupInputRef.current.click()
+  }
+
+  function onImportBackupChange(e) {
+    const file = e?.target?.files && e.target.files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const text = String(reader.result || '')
+        const parsed = JSON.parse(text)
+        if (!parsed || parsed.kind !== 'prompt-ide-backup') throw new Error('Invalid backup file')
+        const b = parsed.data || {}
+        const nextPrompts = Array.isArray(b.prompts) ? b.prompts : []
+        setPrompts(nextPrompts)
+        setSelectedId(typeof b.selectedId === 'string' ? b.selectedId : null)
+        if (b.model) setModel(b.model)
+        if (b.theme) setTheme(b.theme)
+        const per = b.perPromptUi || {}
+        try {
+          Object.entries(per).forEach(([pid, ui]) => {
+            try { localStorage.setItem(`preview_state_${pid}`, JSON.stringify(ui?.preview || {})) } catch {}
+            try { localStorage.setItem(`collapsed_state_${pid}`, JSON.stringify(ui?.collapsed || {})) } catch {}
+            try { localStorage.setItem(`run_messages_${pid}`, JSON.stringify(Array.isArray(ui?.runMessages) ? ui.runMessages : [])) } catch {}
+            try { localStorage.setItem(`chat_input_${pid}`, String(ui?.chatInput || '')) } catch {}
+            try { localStorage.setItem(`tools_panel_open_${pid}`, ui?.toolsPanelOpen ? '1' : '0') } catch {}
+          })
+        } catch {}
+        messageApi.success('Backup restored')
+      } catch {
+        messageApi.error('Failed to restore backup')
+      } finally {
+        if (e?.target) e.target.value = ''
+      }
+    }
+    reader.onerror = () => {
+      messageApi.error('Error reading file')
+      if (e?.target) e.target.value = ''
+    }
+    reader.readAsText(file)
   }
 
   // Open file dialog for importing prompt JSON
@@ -1009,7 +1121,8 @@ function App() {
       {messageContextHolder}
       <Layout style={{ height: '100vh' }}>
         <Layout.Sider width={280} style={{ background: 'transparent', borderRight: '1px solid var(--panel-border)' }}>
-          <div style={{ padding: 12 }} className="scrolly">
+          <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: 12, overflow: 'auto' }} className="scrolly">
             <Typography.Title level={4} style={{ marginTop: 0, color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8 }}>
               <img src={logo} alt="Prompt IDE logo" style={{ width: 20, height: 20 }} />
               <span>Prompt IDE</span>
@@ -1056,7 +1169,7 @@ function App() {
                               style={{
                                 padding: 8,
                                 marginBottom: 8,
-                                background: selectedId === p.id ? 'var(--selected-bg)' : undefined,
+                                background: selectedId === p.id ? 'var(--selected-bg)' : 'var(--panel)',
                                 borderRadius: 8,
                                 border: '1px solid var(--panel-border)',
                                 cursor: 'grab',
@@ -1089,10 +1202,32 @@ function App() {
                 </Droppable>
               </DragDropContext>
             </div>
+            </div>
+            <div style={{ padding: 12, borderTop: '1px solid var(--panel-border)' }}>
+              <div className="row">
+                <Button size="small" onClick={exportBackup}>Backup</Button>
+                <Popconfirm
+                  title="Восстановить из резервной копии?"
+                  description="Все текущие промпты будут утеряны. Продолжить?"
+                  okText="Восстановить"
+                  cancelText="Отмена"
+                  onConfirm={triggerImportBackup}
+                >
+                  <Button size="small">Restore</Button>
+                </Popconfirm>
+              </div>
+              <input
+                ref={backupInputRef}
+                type="file"
+                accept="application/json"
+                onChange={onImportBackupChange}
+                style={{ display: 'none' }}
+              />
+            </div>
           </div>
         </Layout.Sider>
         <Layout>
-          <Layout.Content style={{ padding: 16 }} className="scrolly">
+          <Layout.Content style={{ padding: 16 }} className="scrolly" ref={contentRef}>
         {!selectedPrompt ? (
       <div>
             {sharedPreview ? (
@@ -1389,6 +1524,7 @@ function App() {
           </div>
         )}
           </Layout.Content>
+          <FloatButton.BackTop target={() => contentRef.current} tooltip="Наверх" />
         </Layout>
       </Layout>
       </AntApp>
