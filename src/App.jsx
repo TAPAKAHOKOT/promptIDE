@@ -28,7 +28,7 @@ function App() {
   const [copyNotice, setCopyNotice] = useState('')
   const [model, setModel] = useState('gpt-4o-mini')
   const [theme, setTheme] = useState(() => {
-    try { return localStorage.getItem('theme') || 'dark' } catch { return 'dark' }
+    try { return localStorage.getItem('theme') || 'light' } catch { return 'light' }
   })
   const [messageApi, messageContextHolder] = message.useMessage()
   const importInputRef = useRef(null)
