@@ -256,3 +256,26 @@ textarea {
 /* removed legacy toggle styles (antd Switch is used) */
 
 /* removed legacy custom select caret (antd Select is used) */
+
+/* --- Responsive adjustments --- */
+.mobile-only { display: none; }
+
+@media (max-width: 768px) {
+  .row { flex-wrap: wrap; gap: 6px; }
+  .mobile-only { display: inline-flex; }
+  .tool-grid { grid-template-columns: 1fr !important; }
+  .tool-grid > * { width: 100%; }
+  .editor-header { display: grid; gap: 8px; }
+  .title-row input { font-size: 16px; }
+}
+
+/* Fullscreen mobile overlay for open sider */
+.mobile-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 999;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease-out;
+}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ConfigProvider, Layout, Button, Input, Segmented, Typography, Space, Select, message, Switch, Checkbox, Collapse, Alert, Spin, FloatButton, App as AntApp, Popconfirm } from 'antd'
 import { theme as antdTheme } from 'antd'
-import { SunOutlined, MoonOutlined, CopyOutlined, DeleteOutlined, HolderOutlined, DownOutlined, RightOutlined } from '@ant-design/icons'
+import { SunOutlined, MoonOutlined, CopyOutlined, DeleteOutlined, HolderOutlined, DownOutlined, RightOutlined, MenuOutlined, CloseOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
@@ -34,6 +34,32 @@ function App() {
   const importInputRef = useRef(null)
   const backupInputRef = useRef(null)
   const contentRef = useRef(null)
+  const [isSiderCollapsed, setIsSiderCollapsed] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
+
+  useEffect(() => {
+    const sync = () => {
+      try {
+        setIsMobile(window.innerWidth <= 768)
+      } catch {}
+    }
+    sync()
+    window.addEventListener('resize', sync)
+    return () => window.removeEventListener('resize', sync)
+  }, [])
+
+  // Lock body scroll when mobile menu is open
+  useEffect(() => {
+    try {
+      const prev = document.body.style.overflow
+      if (isMobile && !isSiderCollapsed) {
+        document.body.style.overflow = 'hidden'
+      } else {
+        document.body.style.overflow = ''
+      }
+      return () => { document.body.style.overflow = prev }
+    } catch {}
+  }, [isMobile, isSiderCollapsed])
 
   // load from localStorage once
   useEffect(() => {
@@ -1120,12 +1146,36 @@ function App() {
       <AntApp>
       {messageContextHolder}
       <Layout style={{ height: '100vh' }}>
-        <Layout.Sider width={280} style={{ background: 'transparent', borderRight: '1px solid var(--panel-border)' }}>
+        <Layout.Sider
+          width={isMobile ? '100vw' : 280}
+          breakpoint="md"
+          collapsedWidth={0}
+          collapsed={isMobile ? false : isSiderCollapsed}
+          onCollapse={(c) => setIsSiderCollapsed(c)}
+          onBreakpoint={(broken) => {
+            setIsMobile(broken)
+            setIsSiderCollapsed(broken ? true : false)
+          }}
+          trigger={null}
+          style={{
+            background: isMobile ? 'var(--bg)' : 'transparent',
+            borderRight: isMobile ? 'none' : '1px solid var(--panel-border)',
+            position: isMobile ? 'fixed' : 'relative',
+            inset: isMobile ? 0 : undefined,
+            height: isMobile ? '100vh' : undefined,
+            zIndex: isMobile ? 1000 : undefined,
+            transform: isMobile ? (isSiderCollapsed ? 'translateX(-100%)' : 'translateX(0)') : 'none',
+            transition: isMobile ? 'transform 200ms ease-out' : undefined,
+          }}
+        >
           <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             <div style={{ padding: 12, overflow: 'auto' }} className="scrolly">
-            <Typography.Title level={4} style={{ marginTop: 0, color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <img src={logo} alt="Prompt IDE logo" style={{ width: 20, height: 20 }} />
-              <span>Prompt IDE</span>
+            <Typography.Title level={4} style={{ marginTop: 0, color: 'var(--text)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <img src={logo} alt="Prompt IDE logo" style={{ width: 20, height: 20 }} />
+                <span>Prompt IDE</span>
+              </span>
+              <Button className="mobile-only" type="text" icon={<CloseOutlined />} onClick={() => setIsSiderCollapsed(true)} />
             </Typography.Title>
             <div className="row">
               <Input.Password
@@ -1175,7 +1225,7 @@ function App() {
                                 cursor: 'grab',
                                 ...dragProvided.draggableProps.style,
                               }}
-                              onClick={() => setSelectedId(p.id)}
+                              onClick={() => { setSelectedId(p.id); try { if (window.innerWidth <= 768) setIsSiderCollapsed(true) } catch {} }}
                             >
                               <div className="row" style={{ justifyContent: 'space-between' }}>
                                 <span className="truncate">{p.title || 'Untitled'}</span>
@@ -1226,6 +1276,13 @@ function App() {
             </div>
           </div>
         </Layout.Sider>
+        {isMobile && (
+          <div
+            className="mobile-overlay"
+            style={{ opacity: isSiderCollapsed ? 0 : 1, pointerEvents: isSiderCollapsed ? 'none' : 'auto' }}
+            onClick={() => setIsSiderCollapsed(true)}
+          />
+        )}
         <Layout>
           <Layout.Content style={{ padding: 16 }} className="scrolly" ref={contentRef}>
         {!selectedPrompt ? (
@@ -1257,30 +1314,62 @@ function App() {
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateRows: 'auto auto 1fr', gap: 12, height: '100%' }}>
-            <div className="row">
-              <Input
-                value={selectedPrompt.title}
-                onChange={e => updateSelected(p => ({ ...p, title: e.target.value }))}
-                placeholder="Prompt title"
-                style={{ flex: 1 }}
-              />
-              <Select
-                value={model}
-                onChange={setModel}
-                style={{ width: 180 }}
-                options={[
-                  { value: 'gpt-4o-mini', label: 'gpt-4o-mini' },
-                  { value: 'gpt-4o', label: 'gpt-4o' },
-                  { value: 'o4-mini', label: 'o4-mini' },
-                  { value: 'o3-mini', label: 'o3-mini' },
-                  { value: 'gpt-4.1', label: 'gpt-4.1' },
-                  { value: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
-                  { value: 'gpt-3.5-turbo', label: 'gpt-3.5-turbo' },
-                ]}
-              />
-              <Button onClick={copyPromptLink}>Share</Button>
-              <Button onClick={exportSelectedPromptAsJson} disabled={!selectedPrompt}>Export</Button>
-            </div>
+            {isMobile ? (
+              <div className="editor-header">
+                <div className="row">
+                  <Button type="text" className="mobile-only" icon={<MenuOutlined />} onClick={() => setIsSiderCollapsed(false)} />
+                  <Input
+                    value={selectedPrompt.title}
+                    onChange={e => updateSelected(p => ({ ...p, title: e.target.value }))}
+                    placeholder="Prompt title"
+                    style={{ flex: 1 }}
+                  />
+                </div>
+                <div className="row">
+                  <Select
+                    value={model}
+                    onChange={setModel}
+                    style={{ width: 180 }}
+                    options={[
+                      { value: 'gpt-4o-mini', label: 'gpt-4o-mini' },
+                      { value: 'gpt-4o', label: 'gpt-4o' },
+                      { value: 'o4-mini', label: 'o4-mini' },
+                      { value: 'o3-mini', label: 'o3-mini' },
+                      { value: 'gpt-4.1', label: 'gpt-4.1' },
+                      { value: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
+                      { value: 'gpt-3.5-turbo', label: 'gpt-3.5-turbo' },
+                    ]}
+                  />
+                  <Button onClick={copyPromptLink}>Share</Button>
+                  <Button onClick={exportSelectedPromptAsJson} disabled={!selectedPrompt}>Export</Button>
+                </div>
+              </div>
+            ) : (
+              <div className="row">
+                <Input
+                  value={selectedPrompt.title}
+                  onChange={e => updateSelected(p => ({ ...p, title: e.target.value }))}
+                  placeholder="Prompt title"
+                  style={{ flex: 1 }}
+                />
+                <Select
+                  value={model}
+                  onChange={setModel}
+                  style={{ width: 180 }}
+                  options={[
+                    { value: 'gpt-4o-mini', label: 'gpt-4o-mini' },
+                    { value: 'gpt-4o', label: 'gpt-4o' },
+                    { value: 'o4-mini', label: 'o4-mini' },
+                    { value: 'o3-mini', label: 'o3-mini' },
+                    { value: 'gpt-4.1', label: 'gpt-4.1' },
+                    { value: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
+                    { value: 'gpt-3.5-turbo', label: 'gpt-3.5-turbo' },
+                  ]}
+                />
+                <Button onClick={copyPromptLink}>Share</Button>
+                <Button onClick={exportSelectedPromptAsJson} disabled={!selectedPrompt}>Export</Button>
+              </div>
+            )}
 
             <section>
               <div className="row" style={{ marginBottom: 8 }}>
@@ -1425,7 +1514,7 @@ function App() {
                           <div className="col">
                             {parseParamsToFields(t.parameters || '').map((f, fi) => (
                               <div key={fi} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 140px 80px', gap: 8, alignItems: 'center' }}>
+                                <div className="tool-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 160px 140px 80px', gap: 8, alignItems: 'center' }}>
                                   <Input
                                     value={f.key}
                                     onChange={e => updateParam(i, fi, { key: e.target.value })}
@@ -1524,7 +1613,7 @@ function App() {
           </div>
         )}
           </Layout.Content>
-          <FloatButton.BackTop target={() => contentRef.current} tooltip="Наверх" />
+          <FloatButton.BackTop target={() => contentRef.current} />
         </Layout>
       </Layout>
       </AntApp>
