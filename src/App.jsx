@@ -61,6 +61,15 @@ function App() {
     } catch {}
   }, [isMobile, isSiderCollapsed])
 
+  // Auto-open menu on mobile when there are no prompts
+  useEffect(() => {
+    try {
+      if (isMobile && Array.isArray(prompts) && prompts.length === 0) {
+        setIsSiderCollapsed(false)
+      }
+    } catch {}
+  }, [isMobile, prompts?.length])
+
   // load from localStorage once
   useEffect(() => {
     try {
@@ -1309,7 +1318,10 @@ function App() {
                 </div>
               </div>
             ) : (
-              <div>Select or create a prompt</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Button type="text" className="mobile-only" icon={<MenuOutlined />} onClick={() => setIsSiderCollapsed(false)} />
+                <div>Select or create a prompt</div>
+              </div>
             )}
           </div>
         ) : (
