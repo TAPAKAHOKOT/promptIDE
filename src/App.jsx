@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ConfigProvider, Layout, Button, Input, Segmented, Typography, Space, Select, AutoComplete, message, Switch, Checkbox, Collapse, Alert, Spin, FloatButton, App as AntApp, Popconfirm } from 'antd'
+import { ConfigProvider, Layout, Button, Input, Segmented, Typography, Select, AutoComplete, message, Switch, Checkbox, Collapse, Alert, Spin, FloatButton, App as AntApp, Popconfirm } from 'antd'
 import { theme as antdTheme } from 'antd'
 import { SunOutlined, MoonOutlined, CopyOutlined, DeleteOutlined, HolderOutlined, DownOutlined, RightOutlined, MenuOutlined, CloseOutlined, CommentOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
@@ -20,13 +20,18 @@ function newPrompt(overrides = {}) {
 }
 
 function App() {
+  const MarkdownBlock = useMemo(() => {
+    const Memo = ({ content }) => (
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content || ''}</ReactMarkdown>
+    )
+    return Memo
+  }, [])
   const [apiKey, setApiKey] = useState('')
   const [prompts, setPrompts] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [isLoaded, setIsLoaded] = useState(false)
   const [sharedPreview, setSharedPreview] = useState(null)
-  const [copyNotice, setCopyNotice] = useState('')
-  const [model, setModel] = useState('gpt-4o-mini')
+  const [model, setModel] = useState('gpt-4.1')
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem('theme') || 'light' } catch { return 'light' }
   })
@@ -36,6 +41,8 @@ function App() {
   const contentRef = useRef(null)
   const [isSiderCollapsed, setIsSiderCollapsed] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
+  // Debounce timers for heavy localStorage writes
+  const saveTimersRef = useRef({ prompts: null, chatInput: null, runMessages: null })
 
   // Predefined model options for Selects
   const presetModelOptions = useMemo(() => ([
@@ -174,9 +181,19 @@ function App() {
 
   useEffect(() => {
     if (!isLoaded) return
-    try {
-      localStorage.setItem('prompts', JSON.stringify(prompts))
-    } catch {}
+    if (saveTimersRef.current.prompts) clearTimeout(saveTimersRef.current.prompts)
+    const snapshot = prompts
+    saveTimersRef.current.prompts = setTimeout(() => {
+      try {
+        localStorage.setItem('prompts', JSON.stringify(snapshot))
+      } catch {}
+    }, 500)
+    return () => {
+      if (saveTimersRef.current.prompts) {
+        clearTimeout(saveTimersRef.current.prompts)
+        saveTimersRef.current.prompts = null
+      }
+    }
   }, [prompts, isLoaded])
 
   useEffect(() => {
@@ -516,12 +533,8 @@ function App() {
     try {
       await navigator.clipboard.writeText(url)
       messageApi.success('Link copied')
-      setCopyNotice('Link copied')
-      setTimeout(() => setCopyNotice(''), 1500)
     } catch {
       messageApi.error('Copy failed')
-      setCopyNotice('Copy failed')
-      setTimeout(() => setCopyNotice(''), 1500)
     }
   }
 
@@ -885,16 +898,38 @@ function App() {
 
   useEffect(() => {
     if (!selectedPrompt) return
-    try {
-      localStorage.setItem(`run_messages_${selectedPrompt.id}`, JSON.stringify(runMessages))
-    } catch {}
+    if (saveTimersRef.current.runMessages) clearTimeout(saveTimersRef.current.runMessages)
+    const pid = selectedPrompt.id
+    const snapshot = runMessages
+    saveTimersRef.current.runMessages = setTimeout(() => {
+      try {
+        localStorage.setItem(`run_messages_${pid}`, JSON.stringify(snapshot))
+      } catch {}
+    }, 500)
+    return () => {
+      if (saveTimersRef.current.runMessages) {
+        clearTimeout(saveTimersRef.current.runMessages)
+        saveTimersRef.current.runMessages = null
+      }
+    }
   }, [runMessages, selectedPrompt?.id])
 
   useEffect(() => {
     if (!selectedPrompt) return
-    try {
-      localStorage.setItem(`chat_input_${selectedPrompt.id}`, chatInput)
-    } catch {}
+    if (saveTimersRef.current.chatInput) clearTimeout(saveTimersRef.current.chatInput)
+    const pid = selectedPrompt.id
+    const value = chatInput
+    saveTimersRef.current.chatInput = setTimeout(() => {
+      try {
+        localStorage.setItem(`chat_input_${pid}`, value)
+      } catch {}
+    }, 500)
+    return () => {
+      if (saveTimersRef.current.chatInput) {
+        clearTimeout(saveTimersRef.current.chatInput)
+        saveTimersRef.current.chatInput = null
+      }
+    }
   }, [chatInput, selectedPrompt?.id])
 
   useEffect(() => {
@@ -1109,7 +1144,7 @@ function App() {
                     <div key={i} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                       <div style={{ fontWeight: 600, marginBottom: 6 }}>{m.role}</div>
                       <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
+                        <MarkdownBlock content={m.content} />
                       </div>
                     </div>
                   ))}
@@ -1123,7 +1158,7 @@ function App() {
                   {sharedPreview.run.transcript.map((m, i) => (
                     <div key={i} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                       <div style={{ fontWeight: 600, marginBottom: 6 }}>{m.role}</div>
-                      {m.content && <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>}
+                      {m.content && <MarkdownBlock content={m.content} />}
                       {Array.isArray(m.tool_calls) && m.tool_calls.length > 0 && (
                         <div style={{ marginTop: 6 }}>
                           <div style={{ fontWeight: 600 }}>Tool calls:</div>
@@ -1462,7 +1497,7 @@ function App() {
                                 previewByMessageId[m.id] ? (
                                   <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
                                     <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', lineHeight: 0.5 }}>
-                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
+                                      <MarkdownBlock content={m.content} />
                                     </Typography.Paragraph>
                                   </div>
                                 ) : (
@@ -1606,7 +1641,7 @@ function App() {
                     ) : (
                       m.content && (
                         <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || ''}</ReactMarkdown>
+                          <MarkdownBlock content={m.content} />
                         </Typography.Paragraph>
                       )
                     )}
