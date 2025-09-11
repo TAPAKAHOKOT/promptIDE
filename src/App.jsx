@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ConfigProvider, Layout, Button, Input, Segmented, Typography, Space, Select, message, Switch, Checkbox, Collapse, Alert, Spin, FloatButton, App as AntApp, Popconfirm } from 'antd'
+import { ConfigProvider, Layout, Button, Input, Segmented, Typography, Space, Select, AutoComplete, message, Switch, Checkbox, Collapse, Alert, Spin, FloatButton, App as AntApp, Popconfirm } from 'antd'
 import { theme as antdTheme } from 'antd'
 import { SunOutlined, MoonOutlined, CopyOutlined, DeleteOutlined, HolderOutlined, DownOutlined, RightOutlined, MenuOutlined, CloseOutlined, CommentOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
@@ -36,6 +36,23 @@ function App() {
   const contentRef = useRef(null)
   const [isSiderCollapsed, setIsSiderCollapsed] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
+
+  // Predefined model options for Selects
+  const presetModelOptions = useMemo(() => ([
+    { value: 'gpt-5', label: 'GPT 5' },
+    { value: 'gpt-5-mini', label: 'GPT 5 mini' },
+    { value: 'gpt-5-nano', label: 'GPT 5 nano' },
+    { value: 'gpt-4.1', label: 'GPT 4.1' },
+    { value: 'gpt-4.1-mini', label: 'GPT 4.1 mini' },
+    { value: 'gpt-4.1-nano', label: 'GPT 4.1 nano' },
+  ]), [])
+
+  // Include current model if it's custom (not in presets)
+  const modelOptions = useMemo(() => {
+    const opts = [...presetModelOptions]
+    if (model && !opts.some(o => o.value === model)) opts.push({ value: model, label: model })
+    return opts.map(o => ({ value: o.value, label: o.label }))
+  }, [model, presetModelOptions])
 
   useEffect(() => {
     const sync = () => {
@@ -942,7 +959,6 @@ function App() {
           .filter(m => m.role !== 'comment')
           .filter(m => m.enabled !== false)
           .map(m => ({ role: m.role, content: m.content })),
-        temperature: 0.7,
       }
       if (tools) {
         payload.tools = tools
@@ -1339,19 +1355,16 @@ function App() {
                   />
                 </div>
                 <div className="row">
-                  <Select
+                  <AutoComplete
                     value={model}
-                    onChange={setModel}
-                    style={{ width: 180 }}
-                    options={[
-                      { value: 'gpt-4o-mini', label: 'gpt-4o-mini' },
-                      { value: 'gpt-4o', label: 'gpt-4o' },
-                      { value: 'o4-mini', label: 'o4-mini' },
-                      { value: 'o3-mini', label: 'o3-mini' },
-                      { value: 'gpt-4.1', label: 'gpt-4.1' },
-                      { value: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
-                      { value: 'gpt-3.5-turbo', label: 'gpt-3.5-turbo' },
-                    ]}
+                    onChange={(val) => setModel(val)}
+                    options={modelOptions}
+                    style={{ width: '100%' }}
+                    placeholder="Model id (type or pick)"
+                    allowClear
+                    filterOption={(inputValue, option) =>
+                      (option?.value || '').toLowerCase().includes(String(inputValue).toLowerCase())
+                    }
                   />
                   <Button onClick={copyPromptLink}>Share</Button>
                   <Button onClick={exportSelectedPromptAsJson} disabled={!selectedPrompt}>Export</Button>
@@ -1365,19 +1378,16 @@ function App() {
                   placeholder="Prompt title"
                   style={{ flex: 1 }}
                 />
-                <Select
+                <AutoComplete
                   value={model}
-                  onChange={setModel}
-                  style={{ width: 180 }}
-                  options={[
-                    { value: 'gpt-4o-mini', label: 'gpt-4o-mini' },
-                    { value: 'gpt-4o', label: 'gpt-4o' },
-                    { value: 'o4-mini', label: 'o4-mini' },
-                    { value: 'o3-mini', label: 'o3-mini' },
-                    { value: 'gpt-4.1', label: 'gpt-4.1' },
-                    { value: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
-                    { value: 'gpt-3.5-turbo', label: 'gpt-3.5-turbo' },
-                  ]}
+                  onChange={(val) => setModel(val)}
+                  options={modelOptions}
+                  style={{ width: 320 }}
+                  placeholder="Model id (type or pick)"
+                  allowClear
+                  filterOption={(inputValue, option) =>
+                    (option?.value || '').toLowerCase().includes(String(inputValue).toLowerCase())
+                  }
                 />
                 <Button onClick={copyPromptLink}>Share</Button>
                 <Button onClick={exportSelectedPromptAsJson} disabled={!selectedPrompt}>Export</Button>
