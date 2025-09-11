@@ -616,6 +616,7 @@ const RunPane = memo(function RunPane({
   runMessages,
   saveAssistantToPrompt,
   MarkdownBlock,
+  runStats,
 }) {
   return (
     <section style={{ marginTop: 12, paddingBottom: 24 }}>
@@ -654,13 +655,34 @@ const RunPane = memo(function RunPane({
                 </div>
               </div>
             )}
-            {m.role === 'assistant' && (
-              <div style={{ marginTop: 6 }}>
-                <Button size="small" onClick={() => saveAssistantToPrompt(idx)} disabled={isRunning}>Add to prompt</Button>
-              </div>
-            )}
           </div>
         ))}
+        {isRunning ? (
+          <div className="panel shimmer" style={{ height: 40, borderColor: 'var(--panel-border)' }} />
+        ) : (
+          runStats && (
+            <div className="panel" style={{ borderStyle: 'dashed', borderColor: 'var(--panel-border)', color: 'var(--muted)' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                {typeof runStats.elapsedMs === 'number' && (
+                  <span><strong>Time:</strong> {(runStats.elapsedMs / 1000).toFixed(2)}s</span>
+                )}
+                {runStats.usage && (
+                  <span>
+                    <strong>Tokens:</strong> prompt {runStats.usage.prompt_tokens || 0}, completion {runStats.usage.completion_tokens || 0}, total {runStats.usage.total_tokens || 0}
+                  </span>
+                )}
+                {typeof runStats.costUSD === 'number' && !Number.isNaN(runStats.costUSD) && (
+                  <span><strong>Cost:</strong> ~${runStats.costUSD.toFixed(6)}</span>
+                )}
+              </div>
+            </div>
+          )
+        )}
+        {!isRunning && runMessages.length > 0 && (
+          <div style={{ marginTop: 6 }}>
+            <Button size="small" onClick={() => saveAssistantToPrompt(runMessages.length - 1)} disabled={isRunning}>Add to prompt</Button>
+          </div>
+        )}
       </div>
     </section>
   )
@@ -709,8 +731,10 @@ function App() {
   const importInputRef = useRef(null)
   const backupInputRef = useRef(null)
   const contentRef = useRef(null)
+  const selectedIdRef = useRef(null)
   const [isSiderCollapsed, setIsSiderCollapsed] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
+  const [pricingTable, setPricingTable] = useState(null)
 
   // Predefined model options for Selects
   const presetModelOptions = useMemo(() => ([
@@ -857,6 +881,43 @@ function App() {
     document.documentElement.setAttribute('data-theme', theme)
     try { localStorage.setItem('theme', theme) } catch {}
   }, [theme])
+
+  // Keep a ref of currently selected prompt id for race-safe updates during async runs
+  useEffect(() => { selectedIdRef.current = selectedId }, [selectedId])
+
+  // Fetch pricing table from configurable URL and cache in localStorage (24h TTL)
+  useEffect(() => {
+    try {
+      const url = import.meta.env.VITE_MODEL_PRICING_URL || ''
+      if (!url) return
+      let cancelled = false
+      const TTL = 24 * 60 * 60 * 1000
+      const now = Date.now()
+      try {
+        const cachedRaw = localStorage.getItem('pricing_table_cache')
+        if (cachedRaw) {
+          const cached = JSON.parse(cachedRaw)
+          if (cached && cached.url === url && cached.fetchedAt && (now - cached.fetchedAt) < TTL && cached.table && typeof cached.table === 'object') {
+            setPricingTable(cached.table)
+            return
+          }
+        }
+      } catch {}
+      ;(async () => {
+        try {
+          const res = await fetch(url, { headers: { 'Accept': 'application/json' } })
+          if (!res.ok) return
+          const data = await res.json().catch(() => null)
+          if (cancelled) return
+          if (data && typeof data === 'object') {
+            setPricingTable(data)
+            try { localStorage.setItem('pricing_table_cache', JSON.stringify({ url, fetchedAt: now, table: data })) } catch {}
+          }
+        } catch {}
+      })()
+      return () => { cancelled = true }
+    } catch {}
+  }, [])
 
   const selectedPrompt = useMemo(
     () => prompts.find(p => p.id === selectedId) || null,
@@ -1501,6 +1562,137 @@ function App() {
   const [runError, setRunError] = useState('')
   const [previewByMessageId, setPreviewByMessageId] = useState({})
   const [collapsedByMessageId, setCollapsedByMessageId] = useState({})
+  const [runStats, setRunStats] = useState(null)
+
+  // Safely update run messages for a specific prompt id.
+  // If the prompt is currently selected, update state; otherwise write directly to localStorage.
+  function updateRunMessagesSafely(promptId, updater) {
+    try {
+      if (selectedIdRef.current === promptId) {
+        setRunMessages(prev => updater(Array.isArray(prev) ? prev : []))
+      } else {
+        const saved = JSON.parse(localStorage.getItem(`run_messages_${promptId}`) || '[]') || []
+        const next = updater(Array.isArray(saved) ? saved : [])
+        localStorage.setItem(`run_messages_${promptId}`, JSON.stringify(Array.isArray(next) ? next : []))
+      }
+    } catch {}
+  }
+
+  function setRunErrorSafely(promptId, text) {
+    if (selectedIdRef.current === promptId) setRunError(text || '')
+  }
+
+  function setRunStatsSafely(promptId, stats) {
+    try {
+      if (selectedIdRef.current === promptId) {
+        setRunStats(stats || null)
+      } else {
+        localStorage.setItem(`run_stats_${promptId}`, JSON.stringify(stats || null))
+      }
+    } catch {}
+  }
+
+  function getPricingTable() {
+    try {
+      // Prices below are converted from per 1M tokens to per 1K tokens
+      // input -> prompt, output -> completion, cached -> cached
+      const HARDCODED_PRICING = {
+        'gpt-5': { prompt: 0.00125, cached: 0.000125, completion: 0.010 },
+        'gpt-5-mini': { prompt: 0.00025, cached: 0.000025, completion: 0.002 },
+        'gpt-5-nano': { prompt: 0.00005, cached: 0.000005, completion: 0.0004 },
+        'gpt-5-chat-latest': { prompt: 0.00125, cached: 0.000125, completion: 0.010 },
+        'gpt-4.1': { prompt: 0.002, cached: 0.0005, completion: 0.008 },
+        'gpt-4.1-mini': { prompt: 0.0004, cached: 0.0001, completion: 0.0016 },
+        'gpt-4.1-nano': { prompt: 0.0001, cached: 0.000025, completion: 0.0004 },
+        'gpt-4o': { prompt: 0.0025, cached: 0.00125, completion: 0.010 },
+        'gpt-4o-2024-05-13': { prompt: 0.005, completion: 0.015 },
+        'gpt-4o-mini': { prompt: 0.00015, cached: 0.000075, completion: 0.0006 },
+        'gpt-realtime': { prompt: 0.004, cached: 0.0004, completion: 0.016 },
+        'gpt-4o-realtime-preview': { prompt: 0.005, cached: 0.0025, completion: 0.020 },
+        'gpt-4o-mini-realtime-preview': { prompt: 0.0006, cached: 0.0003, completion: 0.0024 },
+        'gpt-audio': { prompt: 0.0025, completion: 0.010 },
+        'gpt-4o-audio-preview': { prompt: 0.0025, completion: 0.010 },
+        'gpt-4o-mini-audio-preview': { prompt: 0.00015, completion: 0.0006 },
+        'o1': { prompt: 0.015, cached: 0.0075, completion: 0.060 },
+        'o1-pro': { prompt: 0.150, completion: 0.600 },
+        'o3-pro': { prompt: 0.020, completion: 0.080 },
+        'o3': { prompt: 0.002, cached: 0.0005, completion: 0.008 },
+        'o3-deep-research': { prompt: 0.010, cached: 0.0025, completion: 0.040 },
+        'o4-mini': { prompt: 0.00110, cached: 0.000275, completion: 0.00440 },
+        'o4-mini-deep-research': { prompt: 0.0020, cached: 0.0005, completion: 0.0080 },
+        'o3-mini': { prompt: 0.00110, cached: 0.00055, completion: 0.00440 },
+        'o1-mini': { prompt: 0.00110, cached: 0.00055, completion: 0.00440 },
+        'codex-mini-latest': { prompt: 0.00150, cached: 0.000375, completion: 0.00600 },
+        'gpt-4o-mini-search-preview': { prompt: 0.00015, completion: 0.0006 },
+        'gpt-4o-search-preview': { prompt: 0.0025, completion: 0.010 },
+        'computer-use-preview': { prompt: 0.003, completion: 0.012 },
+        'gpt-image-1': { prompt: 0.005 },
+      }
+      if (pricingTable && typeof pricingTable === 'object') return pricingTable
+      try {
+        const cachedRaw = localStorage.getItem('pricing_table_cache')
+        if (cachedRaw) {
+          const cached = JSON.parse(cachedRaw)
+          if (cached && cached.table && typeof cached.table === 'object') return cached.table
+        }
+      } catch {}
+      const raw = import.meta.env.VITE_MODEL_PRICING || ''
+      if (raw) {
+        const obj = JSON.parse(raw)
+        if (obj && typeof obj === 'object') return obj
+      }
+      return HARDCODED_PRICING
+    } catch {
+      return null
+    }
+  }
+
+  function estimateCostUSD(modelId, usage) {
+    try {
+      if (!usage) return NaN
+      const table = getPricingTable()
+      if (!table) return NaN
+      const key = String(modelId || '')
+      const lower = key.toLowerCase()
+      let entry = table[key] || table[lower] || null
+      if (!entry) {
+        // Try stripping date/version suffixes like -2024-05-13
+        const noDate = lower.replace(/-20\d{2}-\d{2}-\d{2}.*/, '')
+        entry = table[noDate] || entry
+      }
+      if (!entry) {
+        // Try removing common suffixes
+        const candidates = [
+          lower.replace(/-latest$/, ''),
+          lower.replace(/-preview$/, ''),
+          lower.replace(/-chat-latest$/, ''),
+        ].filter(Boolean)
+        for (const c of candidates) {
+          if (table[c]) { entry = table[c]; break }
+        }
+      }
+      if (!entry) {
+        // Longest prefix match (case-insensitive)
+        const keys = Object.keys(table)
+        let best = ''
+        for (const k of keys) {
+          const kl = k.toLowerCase()
+          if (lower.startsWith(kl) && kl.length > best.length) best = k
+        }
+        if (best) entry = table[best]
+      }
+      if (!entry || (entry.prompt == null && entry.input == null)) return NaN
+      const promptRate = Number(entry.prompt ?? entry.input)
+      const completionRate = Number(entry.completion ?? entry.output ?? entry.prompt ?? entry.input)
+      if (!(promptRate >= 0) || !(completionRate >= 0)) return NaN
+      const pt = Number(usage.prompt_tokens || 0)
+      const ct = Number(usage.completion_tokens || 0)
+      const cost = (pt / 1000) * promptRate + (ct / 1000) * completionRate
+      return Number.isFinite(cost) ? cost : NaN
+    } catch {
+      return NaN
+    }
+  }
 
   useEffect(() => {
     if (selectedPrompt) {
@@ -1516,6 +1708,12 @@ function App() {
         setChatInput(inputSaved)
       } catch {
         setChatInput('')
+      }
+      try {
+        const statsSaved = JSON.parse(localStorage.getItem(`run_stats_${selectedPrompt.id}`) || 'null')
+        setRunStats(statsSaved && typeof statsSaved === 'object' ? statsSaved : null)
+      } catch {
+        setRunStats(null)
       }
       try {
         const previewSaved = JSON.parse(localStorage.getItem(`preview_state_${selectedPrompt.id}`) || 'null')
@@ -1534,6 +1732,7 @@ function App() {
       setRunMessages([])
       setChatInput('')
       setRunError('')
+      setRunStats(null)
       setPreviewByMessageId({})
       setCollapsedByMessageId({})
     }
@@ -1546,6 +1745,8 @@ function App() {
   useDebouncedLocalStorage(selectedPrompt ? `preview_state_${selectedPrompt.id}` : '', previewByMessageId, 500, !!selectedPrompt)
 
   useDebouncedLocalStorage(selectedPrompt ? `collapsed_state_${selectedPrompt.id}` : '', collapsedByMessageId, 500, !!selectedPrompt)
+
+  useDebouncedLocalStorage(selectedPrompt ? `run_stats_${selectedPrompt.id}` : '', runStats, 500, !!selectedPrompt)
 
   // Persisted UI state: Tools panel open/closed per prompt
   const getToolsPanelDefault = (pid) => {
@@ -1581,14 +1782,11 @@ function App() {
     return mapped
   }
 
-  async function callOpenAI(messages) {
+  async function callOpenAI(messages, tools) {
     if (!apiKey) {
-      setRunError('Enter OpenAI API Key in the sidebar')
-      return null
+      return { assistant: null, error: 'Enter OpenAI API Key in the sidebar', usage: null, model: model || '' }
     }
-    setRunError('')
     try {
-      const tools = mapToolsForOpenAI(selectedPrompt)
       const payload = {
         model: model || 'gpt-4o-mini',
         messages: messages
@@ -1616,32 +1814,41 @@ function App() {
       const choice = data.choices && data.choices[0]
       const msg = choice?.message
       if (!msg) throw new Error('Empty response from model')
-      // Normalize assistant message
       return {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: msg.content || '',
-        tool_calls: msg.tool_calls || [],
+        assistant: {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: msg.content || '',
+          tool_calls: msg.tool_calls || [],
+        },
+        error: '',
+        usage: data.usage || null,
+        model: data.model || (model || '')
       }
     } catch (e) {
       const hint = 'Note: the key is unsafe on the frontend, and CORS may block requests. Use a proxy/backend if you have problems.'
-      setRunError(`${e.message}\n${hint}`)
-      return null
+      return { assistant: null, error: `${e.message}\n${hint}`, usage: null, model: model || '' }
     }
   }
 
   async function runPrompt() {
     if (!selectedPrompt) return
+    const originId = selectedPrompt.id
+    const tools = mapToolsForOpenAI(selectedPrompt)
     setIsRunning(true)
     try {
+      setRunErrorSafely(originId, '')
+      const startedAt = Date.now()
       const base = selectedPrompt.messages || []
-      // show only model replies in the chat
-      setRunMessages([])
       const loadingId = crypto.randomUUID()
-      setRunMessages(prev => [...prev, { id: loadingId, role: 'assistant', content: '', loading: true }])
-      const assistant = await callOpenAI(base)
-      setRunMessages(prev => prev.filter(m => m.id !== loadingId))
-      if (assistant) setRunMessages(prev => [...prev, assistant])
+      updateRunMessagesSafely(originId, () => [{ id: loadingId, role: 'assistant', content: '', loading: true }])
+      const { assistant, error, usage, model: usedModel } = await callOpenAI(base, tools)
+      updateRunMessagesSafely(originId, prev => prev.filter(m => m.id !== loadingId))
+      if (assistant) updateRunMessagesSafely(originId, prev => [...prev, assistant])
+      if (error) setRunErrorSafely(originId, error)
+      const elapsedMs = Date.now() - startedAt
+      const costUSD = estimateCostUSD(usedModel || model, usage)
+      setRunStatsSafely(originId, { startedAt, elapsedMs, usage, costUSD, model: usedModel || model })
     } finally {
       setIsRunning(false)
       messageApi.success('Prompt run completed successfully')
@@ -1651,18 +1858,25 @@ function App() {
   async function sendUserMessage() {
     if (!selectedPrompt) return
     if (!chatInput.trim()) return
+    const originId = selectedPrompt.id
+    const tools = mapToolsForOpenAI(selectedPrompt)
     const userMsg = { id: crypto.randomUUID(), role: 'user', content: chatInput.trim() }
     const base = selectedPrompt.messages || []
     const next = [...base, userMsg]
     setChatInput('')
     setIsRunning(true)
     try {
+      setRunErrorSafely(originId, '')
+      const startedAt = Date.now()
       const loadingId = crypto.randomUUID()
-      // replace chat with only assistant loading placeholder
-      setRunMessages([{ id: loadingId, role: 'assistant', content: '', loading: true }])
-      const assistant = await callOpenAI([...next])
-      setRunMessages(prev => prev.filter(m => m.id !== loadingId))
-      if (assistant) setRunMessages(prev => [...prev, assistant])
+      updateRunMessagesSafely(originId, () => [{ id: loadingId, role: 'assistant', content: '', loading: true }])
+      const { assistant, error, usage, model: usedModel } = await callOpenAI([...next], tools)
+      updateRunMessagesSafely(originId, prev => prev.filter(m => m.id !== loadingId))
+      if (assistant) updateRunMessagesSafely(originId, prev => [...prev, assistant])
+      if (error) setRunErrorSafely(originId, error)
+      const elapsedMs = Date.now() - startedAt
+      const costUSD = estimateCostUSD(usedModel || model, usage)
+      setRunStatsSafely(originId, { startedAt, elapsedMs, usage, costUSD, model: usedModel || model })
     } finally {
       setIsRunning(false)
     }
@@ -1995,6 +2209,7 @@ function App() {
               runMessages={runMessages}
               saveAssistantToPrompt={saveAssistantToPrompt}
               MarkdownBlock={MarkdownBlock}
+              runStats={runStats}
             />
           </div>
         )}
