@@ -1,13 +1,670 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { ConfigProvider, Layout, Button, Input, Segmented, Typography, Select, AutoComplete, message, Switch, Checkbox, Collapse, Alert, Spin, FloatButton, App as AntApp, Popconfirm } from 'antd'
+import { useEffect, useMemo, useRef, useState, useCallback, memo, lazy, Suspense } from 'react'
+import { ConfigProvider, Layout, Button, Input, Segmented, Typography, Select, AutoComplete, message, Switch, Checkbox, Collapse, Alert, Spin, FloatButton, App as AntApp, Popconfirm, Drawer } from 'antd'
 import { theme as antdTheme } from 'antd'
 import { SunOutlined, MoonOutlined, CopyOutlined, DeleteOutlined, HolderOutlined, DownOutlined, RightOutlined, MenuOutlined, CloseOutlined, CommentOutlined } from '@ant-design/icons'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
 import './App.css'
 import logo from './assets/logo.png'
 import LZString from 'lz-string'
+import remarkGfm from 'remark-gfm'
+import rehypeSanitize from 'rehype-sanitize'
+
+// Debounced localStorage writer hook
+function useDebouncedLocalStorage(key, value, delay = 500, enabled = true) {
+  useEffect(() => {
+    if (!enabled || !key) return
+    const snapshot = value
+    const timer = setTimeout(() => {
+      try {
+        const str = typeof snapshot === 'string' ? snapshot : JSON.stringify(snapshot)
+        localStorage.setItem(key, str)
+      } catch {}
+    }, delay)
+    return () => clearTimeout(timer)
+  }, [key, value, delay, enabled])
+}
+
+// Lazy-load DnD on demand
+function useDnd() {
+  const [dnd, setDnd] = useState(null)
+  useEffect(() => {
+    let mounted = true
+    import('@hello-pangea/dnd').then((mod) => {
+      if (mounted) setDnd(mod)
+    }).catch(() => {})
+    return () => { mounted = false }
+  }, [])
+  return dnd
+}
+
+// Memoized sidebar content (prompts list and controls)
+const SiderPromptsList = memo(function SiderPromptsList({
+  apiKey,
+  setApiKey,
+  theme,
+  setTheme,
+  prompts,
+  selectedId,
+  setSelectedId,
+  isMobile,
+  isSiderCollapsed,
+  setIsSiderCollapsed,
+  addPrompt,
+  triggerImportJson,
+  importInputRef,
+  onImportJsonChange,
+  onDragEndPrompts,
+  duplicatePrompt,
+  deletePrompt,
+  exportBackup,
+  triggerImportBackup,
+  backupInputRef,
+  onImportBackupChange,
+}) {
+  const dnd = useDnd()
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: 12, overflow: 'auto' }} className="scrolly">
+        <Typography.Title level={4} style={{ marginTop: 0, color: 'var(--text)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <img src={logo} alt="Prompt IDE logo" style={{ width: 20, height: 20 }} />
+            <span>Prompt IDE</span>
+          </span>
+          <Button className="mobile-only" type="text" icon={<CloseOutlined />} onClick={() => setIsSiderCollapsed(true)} />
+        </Typography.Title>
+        <div className="row">
+          <Input.Password
+            placeholder="OpenAI API Key"
+            value={apiKey}
+            onChange={e => setApiKey(e.target.value)}
+          />
+          <Segmented
+            value={theme}
+            onChange={val => setTheme(val)}
+            options={[
+              { label: <SunOutlined />, value: 'light' },
+              { label: <MoonOutlined />, value: 'dark' },
+            ]}
+          />
+        </div>
+        <div style={{ marginTop: 12 }} className="row">
+          <Button size="small" type="primary" onClick={addPrompt}>New</Button>
+          <Button size="small" onClick={triggerImportJson}>Import</Button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json"
+            onChange={onImportJsonChange}
+            style={{ display: 'none' }}
+          />
+        </div>
+        <div style={{ marginTop: 12 }}>
+          {dnd ? (
+            <dnd.DragDropContext onDragEnd={onDragEndPrompts}>
+              <dnd.Droppable droppableId="prompts">
+                {(dropProvided) => (
+                  <div ref={dropProvided.innerRef} {...dropProvided.droppableProps}>
+                    {prompts.map((p, index) => (
+                      <dnd.Draggable key={p.id} draggableId={p.id} index={index}>
+                        {(dragProvided) => (
+                          <div
+                            ref={dragProvided.innerRef}
+                            {...dragProvided.draggableProps}
+                            {...dragProvided.dragHandleProps}
+                            className="prompt-item"
+                            style={{
+                              padding: 8,
+                              marginBottom: 8,
+                              background: selectedId === p.id ? 'var(--selected-bg)' : 'var(--panel)',
+                              borderRadius: 8,
+                              border: '1px solid var(--panel-border)',
+                              cursor: 'grab',
+                              ...dragProvided.draggableProps.style,
+                            }}
+                            onClick={() => { setSelectedId(p.id); try { if (window.innerWidth <= 768) setIsSiderCollapsed(true) } catch {} }}
+                         >
+                            <div className="row" style={{ justifyContent: 'space-between' }}>
+                              <span className="truncate">{p.title || 'Untitled'}</span>
+                              <div className="row" onClick={e => e.stopPropagation()}>
+                                <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => duplicatePrompt(p.id)} title="Duplicate" />
+                                <Popconfirm
+                                  title="Delete prompt?"
+                                  description={`Delete "${p.title || 'Untitled'}"? This action is irreversible.`}
+                                  okText="Delete"
+                                  cancelText="Cancel"
+                                  onConfirm={() => deletePrompt(p.id)}
+                                >
+                                  <Button size="small" danger type="text" icon={<DeleteOutlined />} title="Delete" />
+                                </Popconfirm>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </dnd.Draggable>
+                    ))}
+                    {dropProvided.placeholder}
+                  </div>
+                )}
+              </dnd.Droppable>
+            </dnd.DragDropContext>
+          ) : (
+            <div>
+              {prompts.map((p) => (
+                <div
+                  key={p.id}
+                  className="prompt-item"
+                  style={{
+                    padding: 8,
+                    marginBottom: 8,
+                    background: selectedId === p.id ? 'var(--selected-bg)' : 'var(--panel)',
+                    borderRadius: 8,
+                    border: '1px solid var(--panel-border)'
+                  }}
+                  onClick={() => { setSelectedId(p.id); try { if (window.innerWidth <= 768) setIsSiderCollapsed(true) } catch {} }}
+                >
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <span className="truncate">{p.title || 'Untitled'}</span>
+                    <div className="row" onClick={e => e.stopPropagation()}>
+                      <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => duplicatePrompt(p.id)} title="Duplicate" />
+                      <Popconfirm
+                        title="Delete prompt?"
+                        okText="Delete"
+                        cancelText="Cancel"
+                        onConfirm={() => deletePrompt(p.id)}
+                      >
+                        <Button size="small" danger type="text" icon={<DeleteOutlined />} title="Delete" />
+                      </Popconfirm>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <div style={{ padding: 12, borderTop: '1px solid var(--panel-border)' }}>
+        <div className="row">
+          <Button size="small" onClick={exportBackup}>Backup</Button>
+          <Popconfirm
+            title="Restore from backup?"
+            description="All current prompts will be lost. Continue?"
+            okText="Restore"
+            cancelText="Cancel"
+            onConfirm={triggerImportBackup}
+          >
+            <Button size="small">Restore</Button>
+          </Popconfirm>
+          <Button size="small" href="https://t.me/tapakahokot" target="_blank" type="text" icon={<CommentOutlined />} />
+        </div>
+        <input
+          ref={backupInputRef}
+          type="file"
+          accept="application/json"
+          onChange={onImportBackupChange}
+          style={{ display: 'none' }}
+        />
+      </div>
+    </div>
+  )
+})
+
+// Memoized messages editor
+const MessagesEditor = memo(function MessagesEditor({
+  selectedPrompt,
+  selectedId,
+  previewByMessageId,
+  setPreviewByMessageId,
+  collapsedByMessageId,
+  setCollapsedByMessageId,
+  updateMessage,
+  removeMessage,
+  addMessage,
+  onDragEndMessages,
+  MarkdownBlock,
+}) {
+  const dnd = useDnd()
+  const [VList, setVList] = useState(null)
+  useEffect(() => {
+    let mounted = true
+    import('react-window')
+      .then((mod) => {
+        if (!mounted) return
+        const Comp = mod.VariableSizeList || mod.default?.VariableSizeList || mod.FixedSizeList || mod.default?.FixedSizeList
+        if (Comp) setVList(() => Comp)
+      })
+      .catch(() => {})
+    return () => { mounted = false }
+  }, [])
+  const listHeight = useMemo(() => {
+    try { return Math.max(320, Math.min(720, Math.floor(window.innerHeight * 0.5))) } catch { return 480 }
+  }, [])
+  const getItemSize = useCallback((index) => {
+    const m = selectedPrompt.messages[index]
+    if (!m) return 120
+    if (collapsedByMessageId[m.id]) return 48
+    if (previewByMessageId[m.id]) {
+      const len = (m.content || '').length
+      const approx = 120 + Math.min(800, Math.ceil(len / 80) * 20)
+      return approx
+    }
+    return 200
+  }, [selectedPrompt.messages, collapsedByMessageId, previewByMessageId])
+  return (
+    <section>
+      <div className="row" style={{ marginBottom: 8 }}>
+        <strong>Messages</strong>
+      </div>
+      {dnd ? (
+        <dnd.DragDropContext onDragEnd={onDragEndMessages}>
+          <dnd.Droppable droppableId={`messages-${selectedId || 'none'}`}>
+            {(dropProvided) => (
+              <div className="col" ref={dropProvided.innerRef} {...dropProvided.droppableProps}>
+                {selectedPrompt.messages.map((m, index) => (
+                  <dnd.Draggable key={m.id} draggableId={m.id} index={index}>
+                    {(dragProvided) => (
+                      <div
+                        ref={dragProvided.innerRef}
+                        {...dragProvided.draggableProps}
+                        className="panel"
+                        style={{ opacity: m.enabled !== false ? 1 : 0.5, ...dragProvided.draggableProps.style }}
+                      >
+                        <div className="row" style={{ marginBottom: 6 }}>
+                          <span
+                            {...dragProvided.dragHandleProps}
+                            title="Drag to reorder"
+                            style={{ display: 'inline-flex', alignItems: 'center', cursor: 'grab', color: 'var(--muted)' }}
+                          >
+                            <HolderOutlined />
+                          </span>
+                          <Button type="text" size="small" onClick={() => setCollapsedByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
+                            {collapsedByMessageId[m.id] ? <RightOutlined /> : <DownOutlined /> }
+                          </Button>
+                          <Select
+                            size="small"
+                            value={m.role}
+                            onChange={val => updateMessage(m.id, { role: val })}
+                            style={{ width: 140 }}
+                            options={[
+                              { value: 'system', label: 'system' },
+                              { value: 'user', label: 'user' },
+                              { value: 'assistant', label: 'assistant' },
+                              { value: 'comment', label: 'comment' },
+                            ]}
+                          />
+                          <Input
+                            size="small"
+                            value={m.label || ''}
+                            onChange={e => updateMessage(m.id, { label: e.target.value })}
+                            placeholder="label"
+                            style={{ width: 160 }}
+                          />
+                          <Button size="small" onClick={() => setPreviewByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
+                            {previewByMessageId[m.id] ? 'Edit' : 'Preview'}
+                          </Button>
+                          <Switch
+                            size="small"
+                            checked={m.enabled !== false}
+                            onChange={val => updateMessage(m.id, { enabled: val })}
+                          />
+                          <Popconfirm
+                            title="Delete message?"
+                            okText="Delete"
+                            cancelText="Cancel"
+                            onConfirm={() => removeMessage(m.id)}
+                          >
+                            <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
+                          </Popconfirm>
+                        </div>
+                        {!collapsedByMessageId[m.id] && (
+                          previewByMessageId[m.id] ? (
+                            <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
+                              <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', lineHeight: 0.5 }}>
+                                <MarkdownBlock content={m.content} />
+                              </Typography.Paragraph>
+                            </div>
+                          ) : (
+                            <Input.TextArea
+                              value={m.content}
+                              onChange={e => updateMessage(m.id, { content: e.target.value })}
+                              autoSize={{ minRows: 6, maxRows: 20 }}
+                              placeholder="Message content (Markdown supported)"
+                            />
+                          )
+                        )}
+                      </div>
+                    )}
+                  </dnd.Draggable>
+                ))}
+                {dropProvided.placeholder}
+              </div>
+            )}
+          </dnd.Droppable>
+        </dnd.DragDropContext>
+      ) : (
+        <div className="col">
+          {VList ? (
+          <VList
+            height={listHeight}
+            width={'100%'}
+            itemCount={selectedPrompt.messages.length}
+            itemSize={getItemSize}
+            itemKey={(index) => selectedPrompt.messages[index]?.id || index}
+          >
+            {({ index, style }) => {
+              const m = selectedPrompt.messages[index]
+              if (!m) return <div style={style} />
+              return (
+                <div style={style}>
+                  <div className="panel" style={{ opacity: m.enabled !== false ? 1 : 0.5 }}>
+                    <div className="row" style={{ marginBottom: 6 }}>
+                      <span title="Reorder" style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--muted)' }}>
+                        <HolderOutlined />
+                      </span>
+                      <Button type="text" size="small" onClick={() => setCollapsedByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
+                        {collapsedByMessageId[m.id] ? <RightOutlined /> : <DownOutlined /> }
+                      </Button>
+                      <Select
+                        size="small"
+                        value={m.role}
+                        onChange={val => updateMessage(m.id, { role: val })}
+                        style={{ width: 140 }}
+                        options={[
+                          { value: 'system', label: 'system' },
+                          { value: 'user', label: 'user' },
+                          { value: 'assistant', label: 'assistant' },
+                          { value: 'comment', label: 'comment' },
+                        ]}
+                      />
+                      <Input
+                        size="small"
+                        value={m.label || ''}
+                        onChange={e => updateMessage(m.id, { label: e.target.value })}
+                        placeholder="label"
+                        style={{ width: 160 }}
+                      />
+                      <Button size="small" onClick={() => setPreviewByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
+                        {previewByMessageId[m.id] ? 'Edit' : 'Preview'}
+                      </Button>
+                      <Switch
+                        size="small"
+                        checked={m.enabled !== false}
+                        onChange={val => updateMessage(m.id, { enabled: val })}
+                      />
+                      <Popconfirm
+                        title="Delete message?"
+                        okText="Delete"
+                        cancelText="Cancel"
+                        onConfirm={() => removeMessage(m.id)}
+                      >
+                        <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
+                      </Popconfirm>
+                    </div>
+                    {!collapsedByMessageId[m.id] && (
+                      previewByMessageId[m.id] ? (
+                        <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
+                          <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', lineHeight: 0.5 }}>
+                            <MarkdownBlock content={m.content} />
+                          </Typography.Paragraph>
+                        </div>
+                      ) : (
+                        <Input.TextArea
+                          value={m.content}
+                          onChange={e => updateMessage(m.id, { content: e.target.value })}
+                          autoSize={{ minRows: 6, maxRows: 20 }}
+                          placeholder="Message content (Markdown supported)"
+                        />
+                      )
+                    )}
+                  </div>
+                </div>
+              )
+            }}
+          </VList>
+          ) : (
+            selectedPrompt.messages.map((m) => (
+              <div key={m.id} className="panel" style={{ opacity: m.enabled !== false ? 1 : 0.5 }}>
+                <div className="row" style={{ marginBottom: 6 }}>
+                  <span title="Reorder" style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--muted)' }}>
+                    <HolderOutlined />
+                  </span>
+                  <Button type="text" size="small" onClick={() => setCollapsedByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
+                    {collapsedByMessageId[m.id] ? <RightOutlined /> : <DownOutlined /> }
+                  </Button>
+                  <Select
+                    size="small"
+                    value={m.role}
+                    onChange={val => updateMessage(m.id, { role: val })}
+                    style={{ width: 140 }}
+                    options={[
+                      { value: 'system', label: 'system' },
+                      { value: 'user', label: 'user' },
+                      { value: 'assistant', label: 'assistant' },
+                      { value: 'comment', label: 'comment' },
+                    ]}
+                  />
+                  <Input
+                    size="small"
+                    value={m.label || ''}
+                    onChange={e => updateMessage(m.id, { label: e.target.value })}
+                    placeholder="label"
+                    style={{ width: 160 }}
+                  />
+                  <Button size="small" onClick={() => setPreviewByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
+                    {previewByMessageId[m.id] ? 'Edit' : 'Preview'}
+                  </Button>
+                  <Switch
+                    size="small"
+                    checked={m.enabled !== false}
+                    onChange={val => updateMessage(m.id, { enabled: val })}
+                  />
+                  <Popconfirm
+                    title="Delete message?"
+                    okText="Delete"
+                    cancelText="Cancel"
+                    onConfirm={() => removeMessage(m.id)}
+                  >
+                    <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
+                  </Popconfirm>
+                </div>
+                {!collapsedByMessageId[m.id] && (
+                  previewByMessageId[m.id] ? (
+                    <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
+                      <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', lineHeight: 0.5 }}>
+                        <MarkdownBlock content={m.content} />
+                      </Typography.Paragraph>
+                    </div>
+                  ) : (
+                    <Input.TextArea
+                      value={m.content}
+                      onChange={e => updateMessage(m.id, { content: e.target.value })}
+                      autoSize={{ minRows: 6, maxRows: 20 }}
+                      placeholder="Message content (Markdown supported)"
+                    />
+                  )
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+      <div className="row" style={{ marginTop: 8 }}>
+        <Button size="small" onClick={() => addMessage('system')}>+ system</Button>
+        <Button size="small" onClick={() => addMessage('user')}>+ user</Button>
+        <Button size="small" onClick={() => addMessage('assistant')}>+ assistant</Button>
+        <Button size="small" onClick={() => addMessage('comment')}>+ comment</Button>
+      </div>
+    </section>
+  )
+})
+
+// Memoized tools editor
+const ToolsEditor = memo(function ToolsEditor({
+  selectedPrompt,
+  addTool,
+  updateTool,
+  removeTool,
+  parseParamsToFields,
+  addParam,
+  updateParam,
+  removeParam,
+  getToolsPanelDefault,
+}) {
+  return (
+    <section>
+      <Collapse
+        key={`tools-${selectedPrompt?.id || 'none'}`}
+        defaultActiveKey={getToolsPanelDefault(selectedPrompt?.id) ? ['tools'] : []}
+        onChange={(keys) => {
+          const isOpen = Array.isArray(keys) ? keys.includes('tools') : keys === 'tools'
+          try { if (selectedPrompt) localStorage.setItem(`tools_panel_open_${selectedPrompt.id}`, isOpen ? '1' : '0') } catch {}
+        }}
+        style={{ marginTop: 12, marginBottom: 8 }}
+      >
+        <Collapse.Panel
+          header="Tools"
+          key="tools"
+          extra={(
+            <Button
+              size="small"
+              onClick={(e) => { e.stopPropagation(); addTool() }}
+            >
+              + tool
+            </Button>
+          )}
+        >
+          <div className="col">
+            {(selectedPrompt.tools || []).map((t, i) => (
+              <div key={i} className="panel" style={{ opacity: t.enabled !== false ? 1 : 0.5 }}>
+                <div className="row" style={{ marginBottom: 6 }}>
+                  <Input value={t.name} onChange={e => updateTool(i, { name: e.target.value })} placeholder="Tool name" />
+                  <Switch size="small" checked={t.enabled !== false} onChange={val => updateTool(i, { enabled: val })} />
+                  <Popconfirm
+                    title="Delete tool?"
+                    okText="Delete"
+                    cancelText="Cancel"
+                    onConfirm={() => removeTool(i)}
+                  >
+                    <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
+                  </Popconfirm>
+                </div>
+                <Input value={t.description} onChange={e => updateTool(i, { description: e.target.value })} placeholder="Description" />
+                <div style={{ marginTop: 8, borderTop: '1px dashed var(--panel-border)', paddingTop: 8 }}>
+                  <div className="row" style={{ marginBottom: 6 }}>
+                    <strong>Parameters</strong>
+                    <Button size="small" onClick={() => addParam(i)}>+ parameter</Button>
+                  </div>
+                  <div className="col">
+                    {parseParamsToFields(t.parameters || '').map((f, fi) => (
+                      <div key={fi} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
+                        <div className="tool-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 160px 140px 80px', gap: 8, alignItems: 'center' }}>
+                          <Input
+                            value={f.key}
+                            onChange={e => updateParam(i, fi, { key: e.target.value })}
+                            placeholder="name"
+                          />
+                          <Select
+                            value={f.type}
+                            onChange={val => updateParam(i, fi, { type: val })}
+                            options={[
+                              { value: 'string', label: 'string' },
+                              { value: 'number', label: 'number' },
+                              { value: 'integer', label: 'integer' },
+                              { value: 'boolean', label: 'boolean' },
+                            ]}
+                          />
+                          <Checkbox
+                            checked={!!f.required}
+                            onChange={e => updateParam(i, fi, { required: e.target.checked })}
+                          >required</Checkbox>
+                          <Popconfirm
+                            title="Delete parameter?"
+                            okText="Delete"
+                            cancelText="Cancel"
+                            onConfirm={() => removeParam(i, fi)}
+                          >
+                            <Button type="text" size="small" danger icon={<DeleteOutlined />} title="Delete" />
+                          </Popconfirm>
+                        </div>
+                        <Input
+                          value={f.description}
+                          onChange={e => updateParam(i, fi, { description: e.target.value })}
+                          placeholder="description"
+                          style={{ marginTop: 6 }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <Collapse style={{ marginTop: 8 }}>
+                    <Collapse.Panel header="Advanced (view JSON schema)" key="1">
+                      <pre style={{ whiteSpace: 'pre-wrap' }}>{t.parameters || ''}</pre>
+                    </Collapse.Panel>
+                  </Collapse>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Collapse.Panel>
+      </Collapse>
+    </section>
+  )
+})
+
+// Memoized run pane
+const RunPane = memo(function RunPane({
+  runPrompt,
+  isRunning,
+  runError,
+  runMessages,
+  saveAssistantToPrompt,
+  MarkdownBlock,
+}) {
+  return (
+    <section style={{ marginTop: 12, paddingBottom: 24 }}>
+      <div className="row" style={{ marginBottom: 8 }}>
+        <Button size="small" type="primary" onClick={runPrompt} disabled={isRunning}>Run</Button>
+        {isRunning && <Spin size="small" />}
+      </div>
+      {runError && (
+        <Alert type="error" showIcon style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }} message={runError} />
+      )}
+      <div className="panel" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {runMessages.length === 0 && <div style={{ color: 'var(--muted)' }}>Press "Run" to get a response from the model.</div>}
+        {runMessages.map((m, idx) => (
+          <div key={m.id || idx} style={{ textAlign: 'left' }}>
+            {m.role !== 'assistant' && <div style={{ fontWeight: 600 }}>{m.role}</div>}
+            {m.loading ? (
+              <div className="panel shimmer" style={{ height: 56, borderColor: 'var(--panel-border)' }} />
+            ) : (
+              m.content && (
+                <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                  <MarkdownBlock content={m.content} />
+                </Typography.Paragraph>
+              )
+            )}
+            {Array.isArray(m.tool_calls) && m.tool_calls.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <div style={{ fontWeight: 600 }}>Tool calls:</div>
+                <div className="col" style={{ gap: 6 }}>
+                  {m.tool_calls.map((tc, i) => (
+                    <div key={i} className="panel" style={{ borderStyle: 'dashed', borderColor: 'var(--panel-border)' }}>
+                      <div><strong>name:</strong> {tc?.function?.name || 'unknown'}</div>
+                      <div><strong>arguments:</strong></div>
+                      <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{tc?.function?.arguments || ''}</pre>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {m.role === 'assistant' && (
+              <div style={{ marginTop: 6 }}>
+                <Button size="small" onClick={() => saveAssistantToPrompt(idx)} disabled={isRunning}>Add to prompt</Button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+})
 
 function newPrompt(overrides = {}) {
   return {
@@ -21,8 +678,21 @@ function newPrompt(overrides = {}) {
 
 function App() {
   const MarkdownBlock = useMemo(() => {
+    const LazyRM = lazy(() => import('react-markdown'))
     const Memo = ({ content }) => (
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content || ''}</ReactMarkdown>
+      <Suspense fallback={<span />}> 
+        <LazyRM
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeSanitize]}
+          components={{
+            a: ({ href, children, ...props }) => (
+              <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
+            ),
+          }}
+        >
+          {content || ''}
+        </LazyRM>
+      </Suspense>
     )
     return Memo
   }, [])
@@ -41,8 +711,6 @@ function App() {
   const contentRef = useRef(null)
   const [isSiderCollapsed, setIsSiderCollapsed] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
-  // Debounce timers for heavy localStorage writes
-  const saveTimersRef = useRef({ prompts: null, chatInput: null, runMessages: null })
 
   // Predefined model options for Selects
   const presetModelOptions = useMemo(() => ([
@@ -171,30 +839,10 @@ function App() {
     load()
   }, [])
 
-  // persist
-  useEffect(() => {
-    if (!isLoaded) return
-    try {
-      localStorage.setItem('openai_api_key', apiKey || '')
-    } catch {}
-  }, [apiKey, isLoaded])
+  // persist (debounced)
+  useDebouncedLocalStorage('openai_api_key', apiKey || '', 500, isLoaded)
 
-  useEffect(() => {
-    if (!isLoaded) return
-    if (saveTimersRef.current.prompts) clearTimeout(saveTimersRef.current.prompts)
-    const snapshot = prompts
-    saveTimersRef.current.prompts = setTimeout(() => {
-      try {
-        localStorage.setItem('prompts', JSON.stringify(snapshot))
-      } catch {}
-    }, 500)
-    return () => {
-      if (saveTimersRef.current.prompts) {
-        clearTimeout(saveTimersRef.current.prompts)
-        saveTimersRef.current.prompts = null
-      }
-    }
-  }, [prompts, isLoaded])
+  useDebouncedLocalStorage('prompts', prompts, 500, isLoaded)
 
   useEffect(() => {
     if (!isLoaded) return
@@ -203,12 +851,7 @@ function App() {
     } catch {}
   }, [selectedId, isLoaded])
 
-  useEffect(() => {
-    if (!isLoaded) return
-    try {
-      localStorage.setItem('openai_model', model)
-    } catch {}
-  }, [model, isLoaded])
+  useDebouncedLocalStorage('openai_model', model, 500, isLoaded)
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -220,13 +863,13 @@ function App() {
     [prompts, selectedId]
   )
 
-  function addPrompt() {
+  const addPrompt = useCallback(() => {
     const p = newPrompt()
     setPrompts(prev => [p, ...prev])
     setSelectedId(p.id)
-  }
+  }, [])
 
-  function duplicatePrompt(id) {
+  const duplicatePrompt = useCallback((id) => {
     const original = prompts.find(p => p.id === id)
     if (!original) return
     const copy = newPrompt({
@@ -269,72 +912,72 @@ function App() {
     } catch {}
     setPrompts(prev => [copy, ...prev])
     setSelectedId(copy.id)
-  }
+  }, [prompts])
 
-  function deletePrompt(id) {
+  const deletePrompt = useCallback((id) => {
     setPrompts(prev => prev.filter(p => p.id !== id))
     if (selectedId === id) setSelectedId(null)
-  }
+  }, [selectedId])
 
-  function updateSelected(updater) {
+  const updateSelected = useCallback((updater) => {
     setPrompts(prev => prev.map(p => (p.id === selectedId ? updater(p) : p)))
-  }
+  }, [selectedId])
 
-  function addMessage(role = 'user') {
+  const addMessage = useCallback((role = 'user') => {
     if (!selectedPrompt) return
     const msg = { id: crypto.randomUUID(), role, content: '', enabled: true }
     updateSelected(p => ({ ...p, messages: [...p.messages, msg] }))
-  }
+  }, [selectedPrompt?.id, updateSelected])
 
-  function updateMessage(id, patch) {
+  const updateMessage = useCallback((id, patch) => {
     updateSelected(p => ({
       ...p,
       messages: p.messages.map(m => (m.id === id ? { ...m, ...patch } : m)),
     }))
-  }
+  }, [updateSelected])
 
-  function removeMessage(id) {
+  const removeMessage = useCallback((id) => {
     updateSelected(p => ({ ...p, messages: p.messages.filter(m => m.id !== id) }))
-  }
+  }, [updateSelected])
 
-  function addTool() {
+  const addTool = useCallback(() => {
     const tool = { name: 'toolName', description: '', parameters: '{"type":"object","properties":{}}', enabled: true }
     updateSelected(p => ({ ...p, tools: [...(p.tools || []), tool] }))
-  }
+  }, [updateSelected])
 
-  function updateTool(index, patch) {
+  const updateTool = useCallback((index, patch) => {
     updateSelected(p => {
       const tools = [...(p.tools || [])]
       tools[index] = { ...tools[index], ...patch }
       return { ...p, tools }
     })
-  }
+  }, [updateSelected])
 
-  function removeTool(index) {
+  const removeTool = useCallback((index) => {
     updateSelected(p => {
       const tools = [...(p.tools || [])]
       tools.splice(index, 1)
       return { ...p, tools }
     })
-  }
+  }, [updateSelected])
 
   // --- DnD: prompts list reordering ---
-  function reorder(list, startIndex, endIndex) {
+  const reorder = useCallback((list, startIndex, endIndex) => {
     const result = Array.from(list)
     const [removed] = result.splice(startIndex, 1)
     result.splice(endIndex, 0, removed)
     return result
-  }
+  }, [])
 
-  function onDragEndPrompts(result) {
+  const onDragEndPrompts = useCallback((result) => {
     const { source, destination } = result || {}
     if (!destination) return
     if (source.index === destination.index) return
     setPrompts(prev => reorder(prev, source.index, destination.index))
-  }
+  }, [reorder])
 
   // --- DnD: messages reordering (handle-only) ---
-  function onDragEndMessages(result) {
+  const onDragEndMessages = useCallback((result) => {
     const { source, destination } = result || {}
     if (!destination) return
     if (source.index === destination.index) return
@@ -344,7 +987,7 @@ function App() {
       const next = reorder(base, source.index, destination.index)
       return { ...p, messages: next }
     }))
-  }
+  }, [selectedId, reorder])
 
   // --- Export / Import helpers ---
   function encodeShared(obj) {
@@ -896,55 +1539,13 @@ function App() {
     }
   }, [selectedPrompt?.id])
 
-  useEffect(() => {
-    if (!selectedPrompt) return
-    if (saveTimersRef.current.runMessages) clearTimeout(saveTimersRef.current.runMessages)
-    const pid = selectedPrompt.id
-    const snapshot = runMessages
-    saveTimersRef.current.runMessages = setTimeout(() => {
-      try {
-        localStorage.setItem(`run_messages_${pid}`, JSON.stringify(snapshot))
-      } catch {}
-    }, 500)
-    return () => {
-      if (saveTimersRef.current.runMessages) {
-        clearTimeout(saveTimersRef.current.runMessages)
-        saveTimersRef.current.runMessages = null
-      }
-    }
-  }, [runMessages, selectedPrompt?.id])
+  useDebouncedLocalStorage(selectedPrompt ? `run_messages_${selectedPrompt.id}` : '', runMessages, 500, !!selectedPrompt)
 
-  useEffect(() => {
-    if (!selectedPrompt) return
-    if (saveTimersRef.current.chatInput) clearTimeout(saveTimersRef.current.chatInput)
-    const pid = selectedPrompt.id
-    const value = chatInput
-    saveTimersRef.current.chatInput = setTimeout(() => {
-      try {
-        localStorage.setItem(`chat_input_${pid}`, value)
-      } catch {}
-    }, 500)
-    return () => {
-      if (saveTimersRef.current.chatInput) {
-        clearTimeout(saveTimersRef.current.chatInput)
-        saveTimersRef.current.chatInput = null
-      }
-    }
-  }, [chatInput, selectedPrompt?.id])
+  useDebouncedLocalStorage(selectedPrompt ? `chat_input_${selectedPrompt.id}` : '', chatInput, 500, !!selectedPrompt)
 
-  useEffect(() => {
-    if (!selectedPrompt) return
-    try {
-      localStorage.setItem(`preview_state_${selectedPrompt.id}`, JSON.stringify(previewByMessageId || {}))
-    } catch {}
-  }, [previewByMessageId, selectedPrompt?.id])
+  useDebouncedLocalStorage(selectedPrompt ? `preview_state_${selectedPrompt.id}` : '', previewByMessageId, 500, !!selectedPrompt)
 
-  useEffect(() => {
-    if (!selectedPrompt) return
-    try {
-      localStorage.setItem(`collapsed_state_${selectedPrompt.id}`, JSON.stringify(collapsedByMessageId || {}))
-    } catch {}
-  }, [collapsedByMessageId, selectedPrompt?.id])
+  useDebouncedLocalStorage(selectedPrompt ? `collapsed_state_${selectedPrompt.id}` : '', collapsedByMessageId, 500, !!selectedPrompt)
 
   // Persisted UI state: Tools panel open/closed per prompt
   const getToolsPanelDefault = (pid) => {
@@ -1206,143 +1807,75 @@ function App() {
       <AntApp>
       {messageContextHolder}
       <Layout style={{ height: '100vh' }}>
-        <Layout.Sider
-          width={isMobile ? '100vw' : 280}
-          breakpoint="md"
-          collapsedWidth={0}
-          collapsed={isMobile ? false : isSiderCollapsed}
-          onCollapse={(c) => setIsSiderCollapsed(c)}
-          onBreakpoint={(broken) => {
-            setIsMobile(broken)
-            setIsSiderCollapsed(broken ? true : false)
-          }}
-          trigger={null}
-          style={{
-            background: isMobile ? 'var(--bg)' : 'transparent',
-            borderRight: isMobile ? 'none' : '1px solid var(--panel-border)',
-            position: isMobile ? 'fixed' : 'relative',
-            inset: isMobile ? 0 : undefined,
-            height: isMobile ? '100vh' : undefined,
-            zIndex: isMobile ? 1000 : undefined,
-            transform: isMobile ? (isSiderCollapsed ? 'translateX(-100%)' : 'translateX(0)') : 'none',
-            transition: isMobile ? 'transform 200ms ease-out' : undefined,
-          }}
-        >
-          <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ padding: 12, overflow: 'auto' }} className="scrolly">
-            <Typography.Title level={4} style={{ marginTop: 0, color: 'var(--text)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                <img src={logo} alt="Prompt IDE logo" style={{ width: 20, height: 20 }} />
-                <span>Prompt IDE</span>
-              </span>
-              <Button className="mobile-only" type="text" icon={<CloseOutlined />} onClick={() => setIsSiderCollapsed(true)} />
-            </Typography.Title>
-            <div className="row">
-              <Input.Password
-                placeholder="OpenAI API Key"
-                value={apiKey}
-                onChange={e => setApiKey(e.target.value)}
-              />
-              <Segmented
-                value={theme}
-                onChange={val => setTheme(val)}
-                options={[
-                  { label: <SunOutlined />, value: 'light' },
-                  { label: <MoonOutlined />, value: 'dark' },
-                ]}
-              />
-            </div>
-            <div style={{ marginTop: 12 }} className="row">
-              <Button size="small" type="primary" onClick={addPrompt}>New</Button>
-              <Button size="small" onClick={triggerImportJson}>Import</Button>
-              <input
-                ref={importInputRef}
-                type="file"
-                accept="application/json"
-                onChange={onImportJsonChange}
-                style={{ display: 'none' }}
-              />
-            </div>
-            <div style={{ marginTop: 12 }}>
-              <DragDropContext onDragEnd={onDragEndPrompts}>
-                <Droppable droppableId="prompts">
-                  {(dropProvided) => (
-                    <div ref={dropProvided.innerRef} {...dropProvided.droppableProps}>
-                      {prompts.map((p, index) => (
-                        <Draggable key={p.id} draggableId={p.id} index={index}>
-                          {(dragProvided) => (
-                            <div
-                              ref={dragProvided.innerRef}
-                              {...dragProvided.draggableProps}
-                              {...dragProvided.dragHandleProps}
-                              className="prompt-item"
-                              style={{
-                                padding: 8,
-                                marginBottom: 8,
-                                background: selectedId === p.id ? 'var(--selected-bg)' : 'var(--panel)',
-                                borderRadius: 8,
-                                border: '1px solid var(--panel-border)',
-                                cursor: 'grab',
-                                ...dragProvided.draggableProps.style,
-                              }}
-                              onClick={() => { setSelectedId(p.id); try { if (window.innerWidth <= 768) setIsSiderCollapsed(true) } catch {} }}
-                            >
-                              <div className="row" style={{ justifyContent: 'space-between' }}>
-                                <span className="truncate">{p.title || 'Untitled'}</span>
-                                <div className="row" onClick={e => e.stopPropagation()}>
-                                  <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => duplicatePrompt(p.id)} title="Duplicate" />
-                                  <Popconfirm
-                                    title="Delete prompt?"
-                                    description={`Delete "${p.title || 'Untitled'}"? This action is irreversible.`}
-                                    okText="Delete"
-                                    cancelText="Cancel"
-                                    onConfirm={() => deletePrompt(p.id)}
-                                  >
-                                    <Button size="small" danger type="text" icon={<DeleteOutlined />} title="Delete" />
-                                  </Popconfirm>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </Draggable>
-                      ))}
-                      {dropProvided.placeholder}
-                    </div>
-                  )}
-                </Droppable>
-              </DragDropContext>
-            </div>
-            </div>
-            <div style={{ padding: 12, borderTop: '1px solid var(--panel-border)' }}>
-              <div className="row">
-                <Button size="small" onClick={exportBackup}>Backup</Button>
-                <Popconfirm
-                  title="Restore from backup?"
-                  description="All current prompts will be lost. Continue?"
-                  okText="Restore"
-                  cancelText="Cancel"
-                  onConfirm={triggerImportBackup}
-                >
-                  <Button size="small">Restore</Button>
-                </Popconfirm>
-                <Button size="small" href="https://t.me/tapakahokot" target="_blank" type="text" icon={<CommentOutlined />} />
-              </div>
-              <input
-                ref={backupInputRef}
-                type="file"
-                accept="application/json"
-                onChange={onImportBackupChange}
-                style={{ display: 'none' }}
-              />
-            </div>
-          </div>
-        </Layout.Sider>
-        {isMobile && (
-          <div
-            className="mobile-overlay"
-            style={{ opacity: isSiderCollapsed ? 0 : 1, pointerEvents: isSiderCollapsed ? 'none' : 'auto' }}
-            onClick={() => setIsSiderCollapsed(true)}
-          />
+        {isMobile ? (
+          <Drawer
+            placement="left"
+            open={!isSiderCollapsed}
+            onClose={() => setIsSiderCollapsed(true)}
+            width="100%"
+            bodyStyle={{ padding: 0, background: 'var(--bg)' }}
+            styles={{ header: { display: 'none' } }}
+          >
+            <SiderPromptsList
+              apiKey={apiKey}
+              setApiKey={setApiKey}
+              theme={theme}
+              setTheme={setTheme}
+              prompts={prompts}
+              selectedId={selectedId}
+              setSelectedId={setSelectedId}
+              isMobile={isMobile}
+              isSiderCollapsed={isSiderCollapsed}
+              setIsSiderCollapsed={setIsSiderCollapsed}
+              addPrompt={addPrompt}
+              triggerImportJson={triggerImportJson}
+              importInputRef={importInputRef}
+              onImportJsonChange={onImportJsonChange}
+              onDragEndPrompts={onDragEndPrompts}
+              duplicatePrompt={duplicatePrompt}
+              deletePrompt={deletePrompt}
+              exportBackup={exportBackup}
+              triggerImportBackup={triggerImportBackup}
+              backupInputRef={backupInputRef}
+              onImportBackupChange={onImportBackupChange}
+            />
+          </Drawer>
+        ) : (
+          <Layout.Sider
+            width={280}
+            collapsedWidth={0}
+            collapsed={isSiderCollapsed}
+            onCollapse={(c) => setIsSiderCollapsed(c)}
+            trigger={null}
+            style={{
+              background: 'transparent',
+              borderRight: '1px solid var(--panel-border)'
+            }}
+          >
+            <SiderPromptsList
+              apiKey={apiKey}
+              setApiKey={setApiKey}
+              theme={theme}
+              setTheme={setTheme}
+              prompts={prompts}
+              selectedId={selectedId}
+              setSelectedId={setSelectedId}
+              isMobile={isMobile}
+              isSiderCollapsed={isSiderCollapsed}
+              setIsSiderCollapsed={setIsSiderCollapsed}
+              addPrompt={addPrompt}
+              triggerImportJson={triggerImportJson}
+              importInputRef={importInputRef}
+              onImportJsonChange={onImportJsonChange}
+              onDragEndPrompts={onDragEndPrompts}
+              duplicatePrompt={duplicatePrompt}
+              deletePrompt={deletePrompt}
+              exportBackup={exportBackup}
+              triggerImportBackup={triggerImportBackup}
+              backupInputRef={backupInputRef}
+              onImportBackupChange={onImportBackupChange}
+            />
+          </Layout.Sider>
         )}
         <Layout>
           <Layout.Content style={{ padding: 16 }} className="scrolly" ref={contentRef}>
@@ -1429,245 +1962,40 @@ function App() {
               </div>
             )}
 
-            <section>
-              <div className="row" style={{ marginBottom: 8 }}>
-                <strong>Messages</strong>
-      </div>
-              <DragDropContext onDragEnd={onDragEndMessages}>
-                <Droppable droppableId={`messages-${selectedId || 'none'}`}>
-                  {(dropProvided) => (
-                    <div className="col" ref={dropProvided.innerRef} {...dropProvided.droppableProps}>
-                      {selectedPrompt.messages.map((m, index) => (
-                        <Draggable key={m.id} draggableId={m.id} index={index}>
-                          {(dragProvided) => (
-                            <div
-                              ref={dragProvided.innerRef}
-                              {...dragProvided.draggableProps}
-                              className="panel"
-                              style={{ opacity: m.enabled !== false ? 1 : 0.5, ...dragProvided.draggableProps.style }}
-                            >
-                              <div className="row" style={{ marginBottom: 6 }}>
-                                <span
-                                  {...dragProvided.dragHandleProps}
-                                  title="Drag to reorder"
-                                  style={{ display: 'inline-flex', alignItems: 'center', cursor: 'grab', color: 'var(--muted)' }}
-                                >
-                                  <HolderOutlined />
-                                </span>
-                                <Button type="text" size="small" onClick={() => setCollapsedByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
-                                  {collapsedByMessageId[m.id] ? <RightOutlined /> : <DownOutlined /> }
-                                </Button>
-                                <Select
-                                  size="small"
-                                  value={m.role}
-                                  onChange={val => updateMessage(m.id, { role: val })}
-                                  style={{ width: 140 }}
-                                  options={[
-                                    { value: 'system', label: 'system' },
-                                    { value: 'user', label: 'user' },
-                                    { value: 'assistant', label: 'assistant' },
-                                    { value: 'comment', label: 'comment' },
-                                  ]}
-                                />
-                                <Input
-                                  size="small"
-                                  value={m.label || ''}
-                                  onChange={e => updateMessage(m.id, { label: e.target.value })}
-                                  placeholder="label"
-                                  style={{ width: 160 }}
-                                />
-                                <Button size="small" onClick={() => setPreviewByMessageId(prev => ({ ...prev, [m.id]: !prev[m.id] }))}>
-                                  {previewByMessageId[m.id] ? 'Edit' : 'Preview'}
-                                </Button>
-                                <Switch
-                                  size="small"
-                                  checked={m.enabled !== false}
-                                  onChange={val => updateMessage(m.id, { enabled: val })}
-                                />
-                                <Popconfirm
-                                  title="Delete message?"
-                                  okText="Delete"
-                                  cancelText="Cancel"
-                                  onConfirm={() => removeMessage(m.id)}
-                                >
-                                  <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
-                                </Popconfirm>
-                              </div>
-                              {!collapsedByMessageId[m.id] && (
-                                previewByMessageId[m.id] ? (
-                                  <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
-                                    <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', lineHeight: 0.5 }}>
-                                      <MarkdownBlock content={m.content} />
-                                    </Typography.Paragraph>
-                                  </div>
-                                ) : (
-                                  <Input.TextArea
-                                    value={m.content}
-                                    onChange={e => updateMessage(m.id, { content: e.target.value })}
-                                    rows={8}
-                                    placeholder="Message content (Markdown supported)"
-                                  />
-                                )
-                              )}
-                            </div>
-                          )}
-                        </Draggable>
-                      ))}
-                      {dropProvided.placeholder}
-                    </div>
-                  )}
-                </Droppable>
-              </DragDropContext>
-              <div className="row" style={{ marginTop: 8 }}>
-                <Button size="small" onClick={() => addMessage('system')}>+ system</Button>
-                <Button size="small" onClick={() => addMessage('user')}>+ user</Button>
-                <Button size="small" onClick={() => addMessage('assistant')}>+ assistant</Button>
-                <Button size="small" onClick={() => addMessage('comment')}>+ comment</Button>
-              </div>
-            </section>
+            <MessagesEditor
+              selectedPrompt={selectedPrompt}
+              selectedId={selectedId}
+              previewByMessageId={previewByMessageId}
+              setPreviewByMessageId={setPreviewByMessageId}
+              collapsedByMessageId={collapsedByMessageId}
+              setCollapsedByMessageId={setCollapsedByMessageId}
+              updateMessage={updateMessage}
+              removeMessage={removeMessage}
+              addMessage={addMessage}
+              onDragEndMessages={onDragEndMessages}
+              MarkdownBlock={MarkdownBlock}
+            />
 
-            <section>
-              <Collapse
-                key={`tools-${selectedPrompt?.id || 'none'}`}
-                defaultActiveKey={getToolsPanelDefault(selectedPrompt?.id) ? ['tools'] : []}
-                onChange={(keys) => {
-                  const isOpen = Array.isArray(keys) ? keys.includes('tools') : keys === 'tools'
-                  try { if (selectedPrompt) localStorage.setItem(`tools_panel_open_${selectedPrompt.id}`, isOpen ? '1' : '0') } catch {}
-                }}
-                style={{ marginTop: 12, marginBottom: 8 }}
-              >
-                <Collapse.Panel
-                  header="Tools"
-                  key="tools"
-                  extra={(
-                    <Button
-                      size="small"
-                      onClick={(e) => { e.stopPropagation(); addTool() }}
-                    >
-                      + tool
-                    </Button>
-                  )}
-                >
-                  <div className="col">
-                    {(selectedPrompt.tools || []).map((t, i) => (
-                      <div key={i} className="panel" style={{ opacity: t.enabled !== false ? 1 : 0.5 }}>
-                        <div className="row" style={{ marginBottom: 6 }}>
-                          <Input value={t.name} onChange={e => updateTool(i, { name: e.target.value })} placeholder="Tool name" />
-                          <Switch size="small" checked={t.enabled !== false} onChange={val => updateTool(i, { enabled: val })} />
-                          <Popconfirm
-                            title="Delete tool?"
-                            okText="Delete"
-                            cancelText="Cancel"
-                            onConfirm={() => removeTool(i)}
-                          >
-                            <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
-                          </Popconfirm>
-                        </div>
-                        <Input value={t.description} onChange={e => updateTool(i, { description: e.target.value })} placeholder="Description" />
-                        <div style={{ marginTop: 8, borderTop: '1px dashed var(--panel-border)', paddingTop: 8 }}>
-                          <div className="row" style={{ marginBottom: 6 }}>
-                            <strong>Parameters</strong>
-                            <Button size="small" onClick={() => addParam(i)}>+ parameter</Button>
-                          </div>
-                          <div className="col">
-                            {parseParamsToFields(t.parameters || '').map((f, fi) => (
-                              <div key={fi} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
-                                <div className="tool-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 160px 140px 80px', gap: 8, alignItems: 'center' }}>
-                                  <Input
-                                    value={f.key}
-                                    onChange={e => updateParam(i, fi, { key: e.target.value })}
-                                    placeholder="name"
-                                  />
-                                  <Select
-                                    value={f.type}
-                                    onChange={val => updateParam(i, fi, { type: val })}
-                                    options={[
-                                      { value: 'string', label: 'string' },
-                                      { value: 'number', label: 'number' },
-                                      { value: 'integer', label: 'integer' },
-                                      { value: 'boolean', label: 'boolean' },
-                                    ]}
-                                  />
-                                  <Checkbox
-                                    checked={!!f.required}
-                                    onChange={e => updateParam(i, fi, { required: e.target.checked })}
-                                  >required</Checkbox>
-                                  <Popconfirm
-                                    title="Delete parameter?"
-                                    okText="Delete"
-                                    cancelText="Cancel"
-                                    onConfirm={() => removeParam(i, fi)}
-                                  >
-                                    <Button type="text" size="small" danger icon={<DeleteOutlined />} title="Delete" />
-                                  </Popconfirm>
-                                </div>
-                                <Input
-                                  value={f.description}
-                                  onChange={e => updateParam(i, fi, { description: e.target.value })}
-                                  placeholder="description"
-                                  style={{ marginTop: 6 }}
-                                />
-                              </div>
-                            ))}
-                          </div>
-                          <Collapse style={{ marginTop: 8 }}>
-                            <Collapse.Panel header="Advanced (view JSON schema)" key="1">
-                              <pre style={{ whiteSpace: 'pre-wrap' }}>{t.parameters || ''}</pre>
-                            </Collapse.Panel>
-                          </Collapse>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </Collapse.Panel>
-              </Collapse>
-            </section>
+            <ToolsEditor
+              selectedPrompt={selectedPrompt}
+              addTool={addTool}
+              updateTool={updateTool}
+              removeTool={removeTool}
+              parseParamsToFields={parseParamsToFields}
+              addParam={addParam}
+              updateParam={updateParam}
+              removeParam={removeParam}
+              getToolsPanelDefault={getToolsPanelDefault}
+            />
 
-            <section style={{ marginTop: 12, paddingBottom: 24 }}>
-              <div className="row" style={{ marginBottom: 8 }}>
-                <Button size="small" type="primary" onClick={runPrompt} disabled={isRunning}>Run</Button>
-                {isRunning && <Spin size="small" />}
-              </div>
-              {runError && (
-                <Alert type="error" showIcon style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }} message={runError} />
-              )}
-              <div className="panel" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {runMessages.length === 0 && <div style={{ color: 'var(--muted)' }}>Press "Run" to get a response from the model.</div>}
-                {runMessages.map((m, idx) => (
-                  <div key={m.id || idx} style={{ textAlign: 'left' }}>
-                    {m.role !== 'assistant' && <div style={{ fontWeight: 600 }}>{m.role}</div>}
-                    {m.loading ? (
-                      <div className="panel shimmer" style={{ height: 56, borderColor: 'var(--panel-border)' }} />
-                    ) : (
-                      m.content && (
-                        <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                          <MarkdownBlock content={m.content} />
-                        </Typography.Paragraph>
-                      )
-                    )}
-                    {Array.isArray(m.tool_calls) && m.tool_calls.length > 0 && (
-                      <div style={{ marginTop: 6 }}>
-                        <div style={{ fontWeight: 600 }}>Tool calls:</div>
-                        <div className="col" style={{ gap: 6 }}>
-                          {m.tool_calls.map((tc, i) => (
-                            <div key={i} className="panel" style={{ borderStyle: 'dashed', borderColor: 'var(--panel-border)' }}>
-                              <div><strong>name:</strong> {tc?.function?.name || 'unknown'}</div>
-                              <div><strong>arguments:</strong></div>
-                              <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{tc?.function?.arguments || ''}</pre>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    {m.role === 'assistant' && (
-                      <div style={{ marginTop: 6 }}>
-                        <Button size="small" onClick={() => saveAssistantToPrompt(idx)} disabled={isRunning}>Add to prompt</Button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </section>
+            <RunPane
+              runPrompt={runPrompt}
+              isRunning={isRunning}
+              runError={runError}
+              runMessages={runMessages}
+              saveAssistantToPrompt={saveAssistantToPrompt}
+              MarkdownBlock={MarkdownBlock}
+            />
           </div>
         )}
           </Layout.Content>
