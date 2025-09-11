@@ -317,7 +317,7 @@ const MessagesEditor = memo(function MessagesEditor({
                         {!collapsedByMessageId[m.id] && (
                           previewByMessageId[m.id] ? (
                             <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
-                              <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', lineHeight: 0.5 }}>
+                              <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', lineHeight: 0.8 }}>
                                 <MarkdownBlock content={m.content} />
                               </Typography.Paragraph>
                             </div>
