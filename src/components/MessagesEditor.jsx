@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, memo } from 'react'
+import { useEffect, useMemo, useState, memo, useRef } from 'react'
 import { Button } from 'antd'
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
 import MessageItem from './MessageItem'
@@ -15,23 +15,56 @@ const MessagesEditor = memo(function MessagesEditor({
   addMessage,
   onDragEndMessages,
   MarkdownBlock,
-  // Performance configuration props
-  performanceMode = 'standard',
 }) {
-  const [VList, setVList] = useState(null)
-  
-  // Load react-window for virtualization
+  const [hoveredGutterIndex, setHoveredGutterIndex] = useState(null)
+  const prevIdsRef = useRef([])
+  const [newlyInsertedId, setNewlyInsertedId] = useState(null)
+  const nodeByIdRef = useRef(new Map())
+  const [exitingById, setExitingById] = useState({})
+
+  // Detect newly inserted message by comparing ids
   useEffect(() => {
-    let mounted = true
-    import('react-window')
-      .then((mod) => {
-        if (!mounted) return
-        const Comp = mod.VariableSizeList || mod.default?.VariableSizeList || mod.FixedSizeList || mod.default?.FixedSizeList
-        if (Comp) setVList(() => Comp)
-      })
-      .catch(() => {})
-    return () => { mounted = false }
-  }, [])
+    const ids = selectedPrompt.messages.map(m => m.id)
+    const prev = prevIdsRef.current
+    let t
+    if (prev.length && ids.length === prev.length + 1) {
+      const added = ids.find(id => !prev.includes(id))
+      if (added) {
+        setNewlyInsertedId(added)
+        t = setTimeout(() => setNewlyInsertedId(null), 600)
+        // JS-driven enter height animation
+        requestAnimationFrame(() => {
+          const node = nodeByIdRef.current.get(added)
+          if (!node) return
+          try {
+            const originalOverflow = node.style.overflow
+            const originalHeight = node.style.height
+            const originalOpacity = node.style.opacity
+            node.style.overflow = 'hidden'
+            const targetHeight = node.scrollHeight
+            node.style.height = '0px'
+            node.style.opacity = '0'
+            // Force reflow
+            // eslint-disable-next-line no-unused-expressions
+            node.offsetHeight
+            node.style.transition = 'height 280ms cubic-bezier(0.2, 0, 0, 1), opacity 220ms ease'
+            node.style.height = targetHeight + 'px'
+            node.style.opacity = '1'
+            const clear = () => {
+              node.style.transition = ''
+              node.style.height = originalHeight
+              node.style.overflow = originalOverflow
+              node.style.opacity = originalOpacity
+              node.removeEventListener('transitionend', clear)
+            }
+            node.addEventListener('transitionend', clear)
+          } catch {}
+        })
+      }
+    }
+    prevIdsRef.current = ids
+    return () => { if (t) clearTimeout(t) }
+  }, [selectedPrompt.messages])
 
   // Calculate total content size for performance threshold
   const totalContentSize = useMemo(() => {
@@ -39,14 +72,6 @@ const MessagesEditor = memo(function MessagesEditor({
       return total + (message.content || '').length
     }, 0)
   }, [selectedPrompt.messages])
-
-  // Determine rendering strategy - default to standard with D&D
-  const renderingStrategy = useMemo(() => {
-    if (performanceMode === 'virtualized') return 'virtualized'
-    
-    // Default to standard rendering with drag-and-drop enabled
-    return 'standard'
-  }, [performanceMode])
 
   // Memoized getItemSize calculation for virtualization
   const getItemSize = useMemo(() => {
@@ -78,31 +103,159 @@ const MessagesEditor = memo(function MessagesEditor({
     try { return Math.max(320, Math.min(720, Math.floor(window.innerHeight * 0.5))) } catch { return 480 }
   }, [])
 
+  // Animated removal handler
+  const handleRemoveWithAnimation = (id) => {
+    try {
+      setExitingById(prev => ({ ...prev, [id]: true }))
+      const node = nodeByIdRef.current.get(id)
+      if (!node) {
+        setTimeout(() => removeMessage(id), 220)
+        return
+      }
+      const originalOverflow = node.style.overflow
+      const originalHeight = node.style.height
+      const originalOpacity = node.style.opacity
+      const height = node.offsetHeight
+      node.style.overflow = 'hidden'
+      node.style.height = height + 'px'
+      node.style.opacity = '1'
+      // Force reflow
+      // eslint-disable-next-line no-unused-expressions
+      node.offsetHeight
+      node.style.transition = 'height 260ms cubic-bezier(0.2, 0, 0, 1), opacity 220ms ease'
+      node.style.height = '0px'
+      node.style.opacity = '0'
+      let done = false
+      const finish = () => {
+        if (done) return
+        done = true
+        // Remove first to avoid visual flash from restoring styles
+        removeMessage(id)
+        // Clean up exit state
+        setTimeout(() => {
+          setExitingById(prev => {
+            const next = { ...prev }
+            delete next[id]
+            return next
+          })
+        }, 0)
+        // Best-effort style cleanup (node may already be unmounted)
+        try {
+          node.style.transition = ''
+          node.style.overflow = originalOverflow
+        } catch {}
+        node.removeEventListener('transitionend', finish)
+      }
+      node.addEventListener('transitionend', finish)
+      setTimeout(finish, 340)
+    } catch {
+      removeMessage(id)
+    }
+  }
+
   // Render standard list with drag-and-drop
   const renderStandardList = () => (
     <DragDropContext onDragEnd={onDragEndMessages}>
       <Droppable droppableId={`messages-${selectedId || 'none'}`}>
         {(dropProvided) => (
           <div className="col" ref={dropProvided.innerRef} {...dropProvided.droppableProps} style={{ gap: 0 }}>
+            {/* Top insertion gutter */}
+            <div
+              key={'gutter-0'}
+              onMouseEnter={() => setHoveredGutterIndex(0)}
+              onMouseLeave={() => setHoveredGutterIndex(prev => (prev === 0 ? null : prev))}
+              style={{
+                height: hoveredGutterIndex === 0 ? 44 : 12,
+                transition: 'height 240ms cubic-bezier(0.2, 0, 0, 1)',
+                transitionDelay: hoveredGutterIndex === 0 ? '150ms' : '0ms',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                overflow: 'hidden'
+              }}
+            >
+              <div style={{
+                display: 'flex',
+                gap: 8,
+                opacity: hoveredGutterIndex === 0 ? 1 : 0,
+                transform: hoveredGutterIndex === 0 ? 'translateY(0) scale(1)' : 'translateY(-4px) scale(0.98)',
+                transition: 'opacity 180ms ease, transform 220ms ease',
+                transitionDelay: hoveredGutterIndex === 0 ? '150ms, 150ms' : '0ms, 0ms',
+                pointerEvents: hoveredGutterIndex === 0 ? 'auto' : 'none'
+              }}>
+                <Button size="small" type="text" onClick={() => addMessage('system', 0)}>system</Button>
+                <Button size="small" type="text" onClick={() => addMessage('user', 0)}>user</Button>
+                <Button size="small" type="text" onClick={() => addMessage('assistant', 0)}>assistant</Button>
+                <Button size="small" type="text" onClick={() => addMessage('comment', 0)}>comment</Button>
+              </div>
+            </div>
             {selectedPrompt.messages.map((m, index) => (
               <Draggable key={m.id} draggableId={m.id} index={index}>
-                {(dragProvided) => (
-                  <MessageItem
-                    message={m}
-                    isCollapsed={collapsedByMessageId[m.id]}
-                    isPreview={previewByMessageId[m.id]}
-                    onUpdate={updateMessage}
-                    onToggleCollapse={setCollapsedByMessageId}
-                    onTogglePreview={setPreviewByMessageId}
-                    onRemove={removeMessage}
-                    MarkdownBlock={MarkdownBlock}
-                    dragHandleProps={dragProvided.dragHandleProps}
-                    draggableProps={dragProvided.draggableProps}
-                    innerRef={dragProvided.innerRef}
-                    isDragDisabled={false}
-                    itemSpacing={8}
-                  />
-                )}
+                  {(dragProvided) => (
+                    <div
+                      key={m.id + '-draggableblock'}
+                      ref={(node) => {
+                        if (dragProvided.innerRef) {
+                          if (typeof dragProvided.innerRef === 'function') {
+                            dragProvided.innerRef(node)
+                          } else if ('current' in dragProvided.innerRef) {
+                            dragProvided.innerRef.current = node
+                          }
+                        }
+                        if (node) {
+                          nodeByIdRef.current.set(m.id, node)
+                        }
+                      }}
+                      {...dragProvided.draggableProps}
+                    >
+                      <MessageItem
+                        message={m}
+                        isCollapsed={collapsedByMessageId[m.id]}
+                        isPreview={previewByMessageId[m.id]}
+                        onUpdate={updateMessage}
+                        onToggleCollapse={setCollapsedByMessageId}
+                        onTogglePreview={setPreviewByMessageId}
+                        onRemove={handleRemoveWithAnimation}
+                        MarkdownBlock={MarkdownBlock}
+                        dragHandleProps={dragProvided.dragHandleProps}
+                        isDragDisabled={false}
+                        itemSpacing={0}
+                        extraClassName={[
+                          newlyInsertedId === m.id ? 'msg-enter' : '',
+                          exitingById[m.id] ? 'msg-exit' : ''
+                        ].filter(Boolean).join(' ')}
+                      />
+                      <div
+                        key={'gutter-' + (index + 1)}
+                        onMouseEnter={() => setHoveredGutterIndex(index + 1)}
+                        onMouseLeave={() => setHoveredGutterIndex(prev => (prev === index + 1 ? null : prev))}
+                        style={{
+                          height: hoveredGutterIndex === index + 1 ? 44 : 12,
+                          transition: 'height 240ms cubic-bezier(0.2, 0, 0, 1)',
+                          transitionDelay: hoveredGutterIndex === index + 1 ? '150ms' : '0ms',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          overflow: 'hidden'
+                        }}
+                      >
+                        <div style={{
+                          display: 'flex',
+                          gap: 8,
+                          opacity: hoveredGutterIndex === index + 1 ? 1 : 0,
+                          transform: hoveredGutterIndex === index + 1 ? 'translateY(0) scale(1)' : 'translateY(-4px) scale(0.98)',
+                          transition: 'opacity 180ms ease, transform 220ms ease',
+                          transitionDelay: hoveredGutterIndex === index + 1 ? '150ms, 150ms' : '0ms, 0ms',
+                          pointerEvents: hoveredGutterIndex === index + 1 ? 'auto' : 'none'
+                        }}>
+                          <Button style={{ color: 'var(--muted)' }} size="small" type="text" onClick={() => addMessage('system', index + 1)}>system</Button>
+                          <Button style={{ color: 'var(--muted)' }} size="small" type="text" onClick={() => addMessage('user', index + 1)}>user</Button>
+                          <Button style={{ color: 'var(--muted)' }} size="small" type="text" onClick={() => addMessage('assistant', index + 1)}>assistant</Button>
+                          <Button style={{ color: 'var(--muted)' }} size="small" type="text" onClick={() => addMessage('comment', index + 1)}>comment</Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
               </Draggable>
             ))}
             {dropProvided.placeholder}
@@ -110,44 +263,6 @@ const MessagesEditor = memo(function MessagesEditor({
         )}
       </Droppable>
     </DragDropContext>
-  )
-
-  // Render virtualized list
-  const renderVirtualizedList = () => (
-    <div className="col">
-      {VList ? (
-        <VList
-          height={listHeight}
-          width={'100%'}
-          itemCount={selectedPrompt.messages.length}
-          itemSize={getItemSize}
-          itemKey={(index) => selectedPrompt.messages[index]?.id || index}
-        >
-          {({ index, style }) => {
-            const m = selectedPrompt.messages[index]
-            if (!m) return <div style={style} />
-            return (
-              <div style={style}>
-                <MessageItem
-                  message={m}
-                  isCollapsed={collapsedByMessageId[m.id]}
-                  isPreview={previewByMessageId[m.id]}
-                  onUpdate={updateMessage}
-                  onToggleCollapse={setCollapsedByMessageId}
-                  onTogglePreview={setPreviewByMessageId}
-                  onRemove={removeMessage}
-                  MarkdownBlock={MarkdownBlock}
-                  isDragDisabled={true}
-                />
-              </div>
-            )
-          }}
-        </VList>
-      ) : (
-        // Fallback to standard list if VList is not loaded
-        renderStandardList()
-      )}
-    </div>
   )
 
   return (
@@ -161,33 +276,12 @@ const MessagesEditor = memo(function MessagesEditor({
             color: 'var(--muted)', 
             marginLeft: 8 
           }}>
-            ({selectedPrompt.messages.length} msgs, {Math.round(totalContentSize / 1024)}KB, {renderingStrategy})
+            ({selectedPrompt.messages.length} msgs, {Math.round(totalContentSize / 1024)}KB)
           </span>
         )}
       </div>
       
-      {/* Render based on strategy - default to standard with D&D */}
-      {renderingStrategy === 'virtualized' ? (
-        renderVirtualizedList()
-      ) : (
-        renderStandardList()
-      )}
-      
-      {/* Performance notification only when virtualization is active */}
-      {renderingStrategy === 'virtualized' && (
-        <div style={{ 
-          fontSize: '12px', 
-          color: 'var(--muted)', 
-          fontStyle: 'italic', 
-          marginTop: 4,
-          padding: '4px 8px',
-          backgroundColor: 'var(--panel-bg)',
-          border: '1px solid var(--panel-border)',
-          borderRadius: '4px'
-        }}>
-          ℹ️ Virtualized rendering active. Drag-and-drop disabled for performance with {selectedPrompt.messages.length} messages.
-        </div>
-      )}
+      {renderStandardList()}
       
       <div className="row" style={{ marginTop: 8 }}>
         <Button size="small" onClick={() => addMessage('system')}>+ system</Button>

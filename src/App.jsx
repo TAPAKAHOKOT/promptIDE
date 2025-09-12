@@ -10,19 +10,214 @@ import rehypeSanitize from 'rehype-sanitize'
 import MessageItem from './components/MessageItem'
 import MessagesEditor from './components/MessagesEditor'
 
-// Debounced localStorage writer hook
-function useDebouncedLocalStorage(key, value, delay = 500, enabled = true) {
+// Optimized debounced localStorage writer hook with compression and dynamic delays
+function useDebouncedLocalStorage(key, value, delay = 1000, enabled = true, options = {}) {
+  const {
+    compressionThreshold = 50000, // 50KB threshold for compression
+    maxDelay = 5000, // Maximum delay for very large content
+    backgroundSync = true, // Enable background serialization
+    autoFlush = true // Auto-flush on unmount/navigation
+  } = options
+
+  const timerRef = useRef(null)
+  const flushRef = useRef(null)
+  const isUnmountingRef = useRef(false)
+
+  // Calculate dynamic delay based on content size
+  const calculateDelay = useCallback((content) => {
+    if (!content) return delay
+    
+    const size = typeof content === 'string' ? content.length : JSON.stringify(content).length
+    
+    // Increase delay for larger content to reduce save frequency
+    if (size > 100000) return Math.min(maxDelay, delay * 3) // 100KB+
+    if (size > 50000) return Math.min(maxDelay, delay * 2)  // 50KB+
+    if (size > 10000) return Math.min(maxDelay, delay * 1.5) // 10KB+
+    
+    return delay
+  }, [delay, maxDelay])
+
+  // Background serialization to prevent UI blocking
+  const serializeInBackground = useCallback((data) => {
+    return new Promise((resolve) => {
+      if (!backgroundSync) {
+        // Synchronous fallback
+        const str = typeof data === 'string' ? data : JSON.stringify(data)
+        resolve(str)
+        return
+      }
+
+      // Use setTimeout to yield to the event loop
+      setTimeout(() => {
+        try {
+          const str = typeof data === 'string' ? data : JSON.stringify(data)
+          resolve(str)
+        } catch (error) {
+          console.warn('Serialization failed:', error)
+          resolve(null)
+        }
+      }, 0)
+    })
+  }, [backgroundSync])
+
+  // Compression logic for large content
+  const compressIfNeeded = useCallback((str) => {
+    if (!str || str.length < compressionThreshold) {
+      return { data: str, compressed: false }
+    }
+
+    try {
+      const compressed = LZString.compress(str)
+      // Only use compression if it actually reduces size significantly
+      if (compressed && compressed.length < str.length * 0.8) {
+        return { data: compressed, compressed: true }
+      }
+    } catch (error) {
+      console.warn('Compression failed:', error)
+    }
+
+    return { data: str, compressed: false }
+  }, [compressionThreshold])
+
+  // Flush function for immediate saves
+  const flush = useCallback(async () => {
+    if (!enabled || !key || isUnmountingRef.current) return
+
+    try {
+      const serialized = await serializeInBackground(value)
+      if (!serialized) return
+
+      const { data, compressed } = compressIfNeeded(serialized)
+      
+      // Store with metadata about compression
+      const storageData = compressed 
+        ? JSON.stringify({ __compressed: true, data })
+        : data
+
+      localStorage.setItem(key, storageData)
+      
+      if (compressed) {
+        console.debug(`Saved ${key} with compression: ${serialized.length} -> ${data.length} bytes`)
+      }
+    } catch (error) {
+      console.warn('Failed to flush to localStorage:', error)
+    }
+  }, [enabled, key, value, serializeInBackground, compressIfNeeded])
+
+  // Store flush function in ref for cleanup
+  flushRef.current = flush
+
   useEffect(() => {
     if (!enabled || !key) return
+
+    // Clear existing timer
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+    }
+
     const snapshot = value
-    const timer = setTimeout(() => {
+    const dynamicDelay = calculateDelay(snapshot)
+
+    timerRef.current = setTimeout(async () => {
+      if (isUnmountingRef.current) return
+
       try {
-        const str = typeof snapshot === 'string' ? snapshot : JSON.stringify(snapshot)
-        localStorage.setItem(key, str)
-      } catch {}
-    }, delay)
-    return () => clearTimeout(timer)
-  }, [key, value, delay, enabled])
+        const serialized = await serializeInBackground(snapshot)
+        if (!serialized || isUnmountingRef.current) return
+
+        const { data, compressed } = compressIfNeeded(serialized)
+        
+        // Store with metadata about compression
+        const storageData = compressed 
+          ? JSON.stringify({ __compressed: true, data })
+          : data
+
+        localStorage.setItem(key, storageData)
+        
+        if (compressed) {
+          console.debug(`Auto-saved ${key} with compression: ${serialized.length} -> ${data.length} bytes`)
+        }
+      } catch (error) {
+        console.warn('Auto-save failed:', error)
+      }
+    }, dynamicDelay)
+
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+      }
+    }
+  }, [key, value, enabled, calculateDelay, serializeInBackground, compressIfNeeded])
+
+  // Auto-flush on unmount/navigation
+  useEffect(() => {
+    if (!autoFlush) return
+
+    const handleBeforeUnload = () => {
+      isUnmountingRef.current = true
+      if (flushRef.current) {
+        // Synchronous flush for beforeunload
+        try {
+          const str = typeof value === 'string' ? value : JSON.stringify(value)
+          const { data, compressed } = compressIfNeeded(str)
+          const storageData = compressed 
+            ? JSON.stringify({ __compressed: true, data })
+            : data
+          localStorage.setItem(key, storageData)
+        } catch (error) {
+          console.warn('Emergency flush failed:', error)
+        }
+      }
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden' && flushRef.current) {
+        flushRef.current()
+      }
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      isUnmountingRef.current = true
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      
+      // Final cleanup flush
+      if (flushRef.current && enabled && key) {
+        flushRef.current()
+      }
+    }
+  }, [autoFlush, key, enabled, value, compressIfNeeded])
+
+  return { flush }
+}
+
+// Helper function to read potentially compressed data from localStorage
+function getFromLocalStorage(key, defaultValue = null) {
+  try {
+    const stored = localStorage.getItem(key)
+    if (!stored) return defaultValue
+
+    // Try to parse as JSON first (might be compressed data with metadata)
+    try {
+      const parsed = JSON.parse(stored)
+      if (parsed && typeof parsed === 'object' && parsed.__compressed === true) {
+        // Decompress the data
+        const decompressed = LZString.decompress(parsed.data)
+        return decompressed ? JSON.parse(decompressed) : defaultValue
+      }
+      // Regular JSON data
+      return parsed
+    } catch {
+      // Not JSON, return as string
+      return stored
+    }
+  } catch (error) {
+    console.warn(`Failed to read from localStorage key "${key}":`, error)
+    return defaultValue
+  }
 }
 
 // Lazy-load DnD on demand
@@ -501,14 +696,15 @@ function App() {
     } catch {}
   }, [isMobile, prompts?.length])
 
-  // load from localStorage once
+  // load from localStorage once (with compression support)
   useEffect(() => {
     try {
-      const savedKey = localStorage.getItem('openai_api_key') || ''
-      const savedPrompts = JSON.parse(localStorage.getItem('prompts') || '[]')
-      const savedSelected = localStorage.getItem('selected_prompt_id')
-      const savedModel = localStorage.getItem('openai_model') || 'gpt-4o-mini'
-      setApiKey(savedKey)
+      const savedKey = getFromLocalStorage('openai_api_key', '')
+      const savedPrompts = getFromLocalStorage('prompts', [])
+      const savedSelected = getFromLocalStorage('selected_prompt_id', null)
+      const savedModel = getFromLocalStorage('openai_model', 'gpt-4o-mini')
+      
+      setApiKey(savedKey || '')
       if (Array.isArray(savedPrompts)) setPrompts(savedPrompts)
       if (savedSelected) setSelectedId(savedSelected)
       setModel(savedModel)
@@ -579,9 +775,15 @@ function App() {
   }, [])
 
   // persist (debounced)
-  useDebouncedLocalStorage('openai_api_key', apiKey || '', 500, isLoaded)
+  useDebouncedLocalStorage('openai_api_key', apiKey || '', 1000, isLoaded)
 
-  useDebouncedLocalStorage('prompts', prompts, 500, isLoaded)
+  // Enhanced auto-save for prompts with compression for large datasets
+  useDebouncedLocalStorage('prompts', prompts, 1500, isLoaded, {
+    compressionThreshold: 30000, // 30KB threshold for prompt data
+    maxDelay: 4000,
+    backgroundSync: true,
+    autoFlush: true
+  })
 
   useEffect(() => {
     if (!isLoaded) return
@@ -590,7 +792,7 @@ function App() {
     } catch {}
   }, [selectedId, isLoaded])
 
-  useDebouncedLocalStorage('openai_model', model, 500, isLoaded)
+  useDebouncedLocalStorage('openai_model', model, 1000, isLoaded)
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -699,10 +901,19 @@ function App() {
     setPrompts(prev => prev.map(p => (p.id === selectedId ? updater(p) : p)))
   }, [selectedId])
 
-  const addMessage = useCallback((role = 'user') => {
+  const addMessage = useCallback((role = 'user', index = null) => {
     if (!selectedPrompt) return
     const msg = { id: crypto.randomUUID(), role, content: '', enabled: true }
-    updateSelected(p => ({ ...p, messages: [...p.messages, msg] }))
+    updateSelected(p => {
+      const next = [...p.messages]
+      if (index == null || index < 0 || index > next.length) {
+        // Append to the end by default
+        return { ...p, messages: [...next, msg] }
+      }
+      // Insert at specified index
+      next.splice(index, 0, msg)
+      return { ...p, messages: next }
+    })
   }, [selectedPrompt?.id, updateSelected])
 
   const updateMessage = useCallback((id, patch) => {
@@ -1009,10 +1220,10 @@ function App() {
         let run = []
         let input = ''
         let toolsOpen = getToolsPanelDefault(pid)
-        try { preview = JSON.parse(localStorage.getItem(`preview_state_${pid}`) || '{}') || {} } catch {}
-        try { collapsed = JSON.parse(localStorage.getItem(`collapsed_state_${pid}`) || '{}') || {} } catch {}
-        try { run = JSON.parse(localStorage.getItem(`run_messages_${pid}`) || '[]') || [] } catch {}
-        try { input = localStorage.getItem(`chat_input_${pid}`) || '' } catch {}
+        preview = getFromLocalStorage(`preview_state_${pid}`, {})
+        collapsed = getFromLocalStorage(`collapsed_state_${pid}`, {})
+        run = getFromLocalStorage(`run_messages_${pid}`, [])
+        input = getFromLocalStorage(`chat_input_${pid}`, '')
         perPromptUi[pid] = {
           preview,
           collapsed,
@@ -1286,7 +1497,7 @@ function App() {
       if (selectedIdRef.current === promptId) {
         setRunMessages(prev => updater(Array.isArray(prev) ? prev : []))
       } else {
-        const saved = JSON.parse(localStorage.getItem(`run_messages_${promptId}`) || '[]') || []
+        const saved = getFromLocalStorage(`run_messages_${promptId}`, [])
         const next = updater(Array.isArray(saved) ? saved : [])
         localStorage.setItem(`run_messages_${promptId}`, JSON.stringify(Array.isArray(next) ? next : []))
       }
@@ -1411,37 +1622,21 @@ function App() {
 
   useEffect(() => {
     if (selectedPrompt) {
-      // load saved assistant-only transcript for this prompt; default to empty
-      try {
-        const saved = JSON.parse(localStorage.getItem(`run_messages_${selectedPrompt.id}`) || 'null')
-        setRunMessages(Array.isArray(saved) ? saved : [])
-      } catch {
-        setRunMessages([])
-      }
-      try {
-        const inputSaved = localStorage.getItem(`chat_input_${selectedPrompt.id}`) || ''
-        setChatInput(inputSaved)
-      } catch {
-        setChatInput('')
-      }
-      try {
-        const statsSaved = JSON.parse(localStorage.getItem(`run_stats_${selectedPrompt.id}`) || 'null')
-        setRunStats(statsSaved && typeof statsSaved === 'object' ? statsSaved : null)
-      } catch {
-        setRunStats(null)
-      }
-      try {
-        const previewSaved = JSON.parse(localStorage.getItem(`preview_state_${selectedPrompt.id}`) || 'null')
-        setPreviewByMessageId(previewSaved && typeof previewSaved === 'object' ? previewSaved : {})
-      } catch {
-        setPreviewByMessageId({})
-      }
-      try {
-        const collapsedSaved = JSON.parse(localStorage.getItem(`collapsed_state_${selectedPrompt.id}`) || 'null')
-        setCollapsedByMessageId(collapsedSaved && typeof collapsedSaved === 'object' ? collapsedSaved : {})
-      } catch {
-        setCollapsedByMessageId({})
-      }
+      // load saved assistant-only transcript for this prompt; default to empty (with compression support)
+      const saved = getFromLocalStorage(`run_messages_${selectedPrompt.id}`, [])
+      setRunMessages(Array.isArray(saved) ? saved : [])
+      
+      const inputSaved = getFromLocalStorage(`chat_input_${selectedPrompt.id}`, '')
+      setChatInput(inputSaved || '')
+      
+      const statsSaved = getFromLocalStorage(`run_stats_${selectedPrompt.id}`, null)
+      setRunStats(statsSaved && typeof statsSaved === 'object' ? statsSaved : null)
+      
+      const previewSaved = getFromLocalStorage(`preview_state_${selectedPrompt.id}`, {})
+      setPreviewByMessageId(previewSaved && typeof previewSaved === 'object' ? previewSaved : {})
+      
+      const collapsedSaved = getFromLocalStorage(`collapsed_state_${selectedPrompt.id}`, {})
+      setCollapsedByMessageId(collapsedSaved && typeof collapsedSaved === 'object' ? collapsedSaved : {})
       setRunError('')
     } else {
       setRunMessages([])
@@ -1453,15 +1648,21 @@ function App() {
     }
   }, [selectedPrompt?.id])
 
-  useDebouncedLocalStorage(selectedPrompt ? `run_messages_${selectedPrompt.id}` : '', runMessages, 500, !!selectedPrompt)
+  // Enhanced auto-save for run messages with compression for large responses
+  useDebouncedLocalStorage(selectedPrompt ? `run_messages_${selectedPrompt.id}` : '', runMessages, 2000, !!selectedPrompt, {
+    compressionThreshold: 20000, // 20KB threshold for run messages
+    maxDelay: 5000,
+    backgroundSync: true,
+    autoFlush: true
+  })
 
-  useDebouncedLocalStorage(selectedPrompt ? `chat_input_${selectedPrompt.id}` : '', chatInput, 500, !!selectedPrompt)
+  useDebouncedLocalStorage(selectedPrompt ? `chat_input_${selectedPrompt.id}` : '', chatInput, 1000, !!selectedPrompt)
 
-  useDebouncedLocalStorage(selectedPrompt ? `preview_state_${selectedPrompt.id}` : '', previewByMessageId, 500, !!selectedPrompt)
+  useDebouncedLocalStorage(selectedPrompt ? `preview_state_${selectedPrompt.id}` : '', previewByMessageId, 1000, !!selectedPrompt)
 
-  useDebouncedLocalStorage(selectedPrompt ? `collapsed_state_${selectedPrompt.id}` : '', collapsedByMessageId, 500, !!selectedPrompt)
+  useDebouncedLocalStorage(selectedPrompt ? `collapsed_state_${selectedPrompt.id}` : '', collapsedByMessageId, 1000, !!selectedPrompt)
 
-  useDebouncedLocalStorage(selectedPrompt ? `run_stats_${selectedPrompt.id}` : '', runStats, 500, !!selectedPrompt)
+  useDebouncedLocalStorage(selectedPrompt ? `run_stats_${selectedPrompt.id}` : '', runStats, 1000, !!selectedPrompt)
 
   // Persisted UI state: Tools panel open/closed per prompt
   const getToolsPanelDefault = (pid) => {

@@ -1,4 +1,4 @@
-import { useCallback, memo } from 'react'
+import { useCallback, useEffect, useRef, useState, memo } from 'react'
 import { Button, Input, Select, Switch, Popconfirm, Typography } from 'antd'
 import { HolderOutlined, DownOutlined, RightOutlined, DeleteOutlined } from '@ant-design/icons'
 import useLocalInputState from '../hooks/useLocalInputState'
@@ -14,11 +14,11 @@ const MessageItem = memo(function MessageItem({
   onRemove,
   MarkdownBlock,
   dragHandleProps,
-  draggableProps,
-  innerRef,
   isDragDisabled = false,
   // Spacing applied as margin-bottom on the draggable root for DnD correctness
   itemSpacing = 0,
+  // Optional extra class applied on root for transient animations
+  extraClassName = '',
 }) {
   // Local state management for message content using useLocalInputState hook
   const {
@@ -59,15 +59,96 @@ const MessageItem = memo(function MessageItem({
   //   }
   // }, [isDirty, syncNow])
 
+  // Smooth expand/collapse animation for content area
+  const contentRef = useRef(null)
+  const [shouldRenderContent, setShouldRenderContent] = useState(!isCollapsed)
+
+  // Handle collapsing animation (children already mounted)
+  useEffect(() => {
+    if (!isCollapsed) return
+    const node = contentRef.current
+    if (!node) return
+    let cleaned = false
+    const onEnd = () => {
+      if (cleaned) return
+      cleaned = true
+      try {
+        node.style.transition = ''
+        node.style.overflow = ''
+        node.style.display = 'none'
+        node.style.height = '0px'
+        node.style.opacity = '0'
+        setShouldRenderContent(false)
+      } catch {}
+      node.removeEventListener('transitionend', onEnd)
+    }
+    requestAnimationFrame(() => {
+      try {
+        node.style.display = ''
+        node.style.overflow = 'hidden'
+        const start = node.scrollHeight
+        node.style.height = start + 'px'
+        node.style.opacity = '1'
+        // Force reflow
+        // eslint-disable-next-line no-unused-expressions
+        node.offsetHeight
+        node.style.transition = 'height 240ms cubic-bezier(0.2, 0, 0, 1), opacity 200ms ease'
+        node.style.height = '0px'
+        node.style.opacity = '0'
+        node.addEventListener('transitionend', onEnd)
+        setTimeout(onEnd, 340)
+      } catch {}
+    })
+    return () => { if (!cleaned) onEnd() }
+  }, [isCollapsed])
+
+  // Ensure content is mounted before expanding; then animate open
+  useEffect(() => {
+    if (isCollapsed) return
+    if (!shouldRenderContent) {
+      setShouldRenderContent(true)
+      return
+    }
+    const node = contentRef.current
+    if (!node) return
+    let cleaned = false
+    const onEnd = () => {
+      if (cleaned) return
+      cleaned = true
+      try {
+        node.style.transition = ''
+        node.style.overflow = ''
+        node.style.height = ''
+        node.style.opacity = ''
+      } catch {}
+      node.removeEventListener('transitionend', onEnd)
+    }
+    requestAnimationFrame(() => {
+      try {
+        node.style.display = ''
+        node.style.overflow = 'hidden'
+        node.style.height = '0px'
+        node.style.opacity = '0'
+        // Force reflow
+        // eslint-disable-next-line no-unused-expressions
+        node.offsetHeight
+        const target = node.scrollHeight
+        node.style.transition = 'height 260ms cubic-bezier(0.2, 0, 0, 1), opacity 200ms ease'
+        node.style.height = target + 'px'
+        node.style.opacity = '1'
+        node.addEventListener('transitionend', onEnd)
+        setTimeout(onEnd, 360)
+      } catch {}
+    })
+    return () => { if (!cleaned) onEnd() }
+  }, [isCollapsed, shouldRenderContent])
+
   return (
     <div
-      ref={innerRef}
-      {...draggableProps}
-      className="panel"
+      className={`panel${extraClassName ? ' ' + extraClassName : ''}`}
       style={{ 
         opacity: message.enabled !== false ? 1 : 0.5,
-        marginBottom: itemSpacing,
-        ...draggableProps?.style
+        marginBottom: itemSpacing
       }}
     >
       <div className="row" style={{ marginBottom: 6 }}>
@@ -143,53 +224,55 @@ const MessageItem = memo(function MessageItem({
           <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
         </Popconfirm>
       </div>
-      {!isCollapsed && (
-        isPreview ? (
-          <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
-            <Typography.Paragraph style={{ 
-              whiteSpace: 'pre-wrap', 
-              wordBreak: 'break-word', 
-              overflowWrap: 'anywhere', 
-              lineHeight: 0.8 
-            }}>
-              <MarkdownBlock content={message.content} />
-            </Typography.Paragraph>
-          </div>
-        ) : (
-          <div style={{ position: 'relative' }}>
-            <Input.TextArea
-              value={localContent}
-              onChange={handleContentChange}
-              onBlur={handleBlur}
-              autoSize={{ minRows: 6, maxRows: 20 }}
-              placeholder="Message content (Markdown supported)"
-              style={isDirty ? { 
-                borderColor: '#faad14',
-                boxShadow: '0 0 0 2px rgba(250, 173, 20, 0.2)'
-              } : {}}
-            />
-            {isDirty && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: -8,
-                  right: 8,
-                  backgroundColor: '#faad14',
-                  color: 'white',
-                  fontSize: '10px',
-                  padding: '2px 6px',
-                  borderRadius: '2px',
-                  fontWeight: 'bold',
-                  zIndex: 1
-                }}
-                title="Unsaved changes - will auto-save in a moment or save on blur"
-              >
-                UNSAVED
-              </div>
-            )}
-          </div>
-        )
-      )}
+      <div ref={contentRef} style={{ display: isCollapsed && !shouldRenderContent ? 'none' : undefined }}>
+        {shouldRenderContent && (
+          isPreview ? (
+            <div className="panel" style={{ borderColor: 'var(--panel-border)' }}>
+              <Typography.Paragraph style={{ 
+                whiteSpace: 'pre-wrap', 
+                wordBreak: 'break-word', 
+                overflowWrap: 'anywhere', 
+                lineHeight: 0.8 
+              }}>
+                <MarkdownBlock content={message.content} />
+              </Typography.Paragraph>
+            </div>
+          ) : (
+            <div style={{ position: 'relative' }}>
+              <Input.TextArea
+                value={localContent}
+                onChange={handleContentChange}
+                onBlur={handleBlur}
+                autoSize={{ minRows: 6, maxRows: 20 }}
+                placeholder="Message content (Markdown supported)"
+                style={isDirty ? { 
+                  borderColor: '#faad14',
+                  boxShadow: '0 0 0 2px rgba(250, 173, 20, 0.2)'
+                } : {}}
+              />
+              {isDirty && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: -8,
+                    right: 8,
+                    backgroundColor: '#faad14',
+                    color: 'white',
+                    fontSize: '10px',
+                    padding: '2px 6px',
+                    borderRadius: '2px',
+                    fontWeight: 'bold',
+                    zIndex: 1
+                  }}
+                  title="Unsaved changes - will auto-save in a moment or save on blur"
+                >
+                  UNSAVED
+                </div>
+              )}
+            </div>
+          )
+        )}
+      </div>
     </div>
   )
 }, (prevProps, nextProps) => {
@@ -202,9 +285,7 @@ const MessageItem = memo(function MessageItem({
     prevProps.message.enabled === nextProps.message.enabled &&
     prevProps.isCollapsed === nextProps.isCollapsed &&
     prevProps.isPreview === nextProps.isPreview &&
-    prevProps.isDragDisabled === nextProps.isDragDisabled &&
-    // Ensure re-render during drag to apply transform/transition styles from DnD
-    prevProps.draggableProps?.style === nextProps.draggableProps?.style
+    prevProps.isDragDisabled === nextProps.isDragDisabled
   )
 })
 
