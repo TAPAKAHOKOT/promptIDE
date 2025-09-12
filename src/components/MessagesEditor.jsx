@@ -27,11 +27,19 @@ const MessagesEditor = memo(function MessagesEditor({
     const ids = selectedPrompt.messages.map(m => m.id)
     const prev = prevIdsRef.current
     let t
+    let expandTimer
     if (prev.length && ids.length === prev.length + 1) {
       const added = ids.find(id => !prev.includes(id))
       if (added) {
         setNewlyInsertedId(added)
         t = setTimeout(() => setNewlyInsertedId(null), 600)
+        // Start newly inserted message collapsed, then expand to animate open
+        try {
+          setCollapsedByMessageId(prevMap => ({ ...prevMap, [added]: true }))
+          expandTimer = setTimeout(() => {
+            setCollapsedByMessageId(prevMap => ({ ...prevMap, [added]: false }))
+          }, 200)
+        } catch {}
         // JS-driven enter height animation
         requestAnimationFrame(() => {
           const node = nodeByIdRef.current.get(added)
@@ -63,7 +71,7 @@ const MessagesEditor = memo(function MessagesEditor({
       }
     }
     prevIdsRef.current = ids
-    return () => { if (t) clearTimeout(t) }
+    return () => { if (t) clearTimeout(t); if (expandTimer) clearTimeout(expandTimer) }
   }, [selectedPrompt.messages])
 
   // Calculate total content size for performance threshold
