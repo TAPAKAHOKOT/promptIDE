@@ -79,7 +79,7 @@ const MessageItem = memo(function MessageItem({
         node.style.height = '0px'
         node.style.opacity = '0'
         setShouldRenderContent(false)
-      } catch {}
+      } catch { /* fill */ }
       node.removeEventListener('transitionend', onEnd)
     }
     requestAnimationFrame(() => {
@@ -97,7 +97,7 @@ const MessageItem = memo(function MessageItem({
         node.style.opacity = '0'
         node.addEventListener('transitionend', onEnd)
         setTimeout(onEnd, 340)
-      } catch {}
+      } catch { /* fill */ }
     })
     return () => { if (!cleaned) onEnd() }
   }, [isCollapsed])
@@ -120,7 +120,7 @@ const MessageItem = memo(function MessageItem({
         node.style.overflow = ''
         node.style.height = ''
         node.style.opacity = ''
-      } catch {}
+      } catch { /* fill */ }
       node.removeEventListener('transitionend', onEnd)
     }
     requestAnimationFrame(() => {
@@ -138,7 +138,7 @@ const MessageItem = memo(function MessageItem({
         node.style.opacity = '1'
         node.addEventListener('transitionend', onEnd)
         setTimeout(onEnd, 360)
-      } catch {}
+      } catch { /* fill */ }
     })
     return () => { if (!cleaned) onEnd() }
   }, [isCollapsed, shouldRenderContent])

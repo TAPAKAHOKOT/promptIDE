@@ -39,7 +39,7 @@ const MessagesEditor = memo(function MessagesEditor({
           expandTimer = setTimeout(() => {
             setCollapsedByMessageId(prevMap => ({ ...prevMap, [added]: false }))
           }, 200)
-        } catch {}
+        } catch { /* fill */ }
         // JS-driven enter height animation
         requestAnimationFrame(() => {
           const node = nodeByIdRef.current.get(added)
@@ -66,7 +66,7 @@ const MessagesEditor = memo(function MessagesEditor({
               node.removeEventListener('transitionend', clear)
             }
             node.addEventListener('transitionend', clear)
-          } catch {}
+          } catch { /* fill */ }
         })
       }
     }
@@ -151,7 +151,7 @@ const MessagesEditor = memo(function MessagesEditor({
         try {
           node.style.transition = ''
           node.style.overflow = originalOverflow
-        } catch {}
+        } catch { /* fill */ }
         node.removeEventListener('transitionend', finish)
       }
       node.addEventListener('transitionend', finish)

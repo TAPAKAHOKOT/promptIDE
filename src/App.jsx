@@ -242,8 +242,6 @@ const SiderPromptsList = memo(function SiderPromptsList({
   prompts,
   selectedId,
   setSelectedId,
-  isMobile,
-  isSiderCollapsed,
   setIsSiderCollapsed,
   addPrompt,
   triggerImportJson,
@@ -317,7 +315,7 @@ const SiderPromptsList = memo(function SiderPromptsList({
                               cursor: 'grab',
                               ...dragProvided.draggableProps.style,
                             }}
-                            onClick={() => { setSelectedId(p.id); try { if (window.innerWidth <= 768) setIsSiderCollapsed(true) } catch {} }}
+                            onClick={() => { setSelectedId(p.id); try { if (window.innerWidth <= 768) setIsSiderCollapsed(true) } catch { /* fill */ } }}
                          >
                             <div className="row" style={{ justifyContent: 'space-between' }}>
                               <span className="truncate">{p.title || 'Untitled'}</span>
@@ -356,7 +354,7 @@ const SiderPromptsList = memo(function SiderPromptsList({
                     borderRadius: 8,
                     border: '1px solid var(--panel-border)'
                   }}
-                  onClick={() => { setSelectedId(p.id); try { if (window.innerWidth <= 768) setIsSiderCollapsed(true) } catch {} }}
+                  onClick={() => { setSelectedId(p.id); try { if (window.innerWidth <= 768) setIsSiderCollapsed(true) } catch { /* fill */ } }}
                 >
                   <div className="row" style={{ justifyContent: 'space-between' }}>
                     <span className="truncate">{p.title || 'Untitled'}</span>
@@ -425,7 +423,7 @@ const ToolsEditor = memo(function ToolsEditor({
         defaultActiveKey={getToolsPanelDefault(selectedPrompt?.id) ? ['tools'] : []}
         onChange={(keys) => {
           const isOpen = Array.isArray(keys) ? keys.includes('tools') : keys === 'tools'
-          try { if (selectedPrompt) localStorage.setItem(`tools_panel_open_${selectedPrompt.id}`, isOpen ? '1' : '0') } catch {}
+          try { if (selectedPrompt) localStorage.setItem(`tools_panel_open_${selectedPrompt.id}`, isOpen ? '1' : '0') } catch { /* fill */ }
         }}
         style={{ marginTop: 12, marginBottom: 8 }}
       >
@@ -667,7 +665,7 @@ function App() {
     const sync = () => {
       try {
         setIsMobile(window.innerWidth <= 768)
-      } catch {}
+      } catch { /* fill */ }
     }
     sync()
     window.addEventListener('resize', sync)
@@ -684,7 +682,7 @@ function App() {
         document.body.style.overflow = ''
       }
       return () => { document.body.style.overflow = prev }
-    } catch {}
+    } catch { /* fill */ }
   }, [isMobile, isSiderCollapsed])
 
   // Auto-open menu on mobile when there are no prompts
@@ -693,7 +691,7 @@ function App() {
       if (isMobile && Array.isArray(prompts) && prompts.length === 0) {
         setIsSiderCollapsed(false)
       }
-    } catch {}
+    } catch { /* fill */ }
   }, [isMobile, prompts?.length])
 
   // load from localStorage once (with compression support)
@@ -727,7 +725,7 @@ function App() {
           }
         }).catch(() => {})
       }
-    } catch {}
+    } catch { /* fill */ }
   }, [])
 
   // Detect shared prompt via URL (#id=... or #share=...)
@@ -789,14 +787,14 @@ function App() {
     if (!isLoaded) return
     try {
       if (selectedId) localStorage.setItem('selected_prompt_id', selectedId)
-    } catch {}
+    } catch { /* fill */ }
   }, [selectedId, isLoaded])
 
   useDebouncedLocalStorage('openai_model', model, 1000, isLoaded)
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
-    try { localStorage.setItem('theme', theme) } catch {}
+    try { localStorage.setItem('theme', theme) } catch { /* fill */ }
   }, [theme])
 
   // Keep a ref of currently selected prompt id for race-safe updates during async runs
@@ -819,7 +817,7 @@ function App() {
             return
           }
         }
-      } catch {}
+      } catch { /* fill */ }
       ;(async () => {
         try {
           const res = await fetch(url, { headers: { 'Accept': 'application/json' } })
@@ -828,12 +826,12 @@ function App() {
           if (cancelled) return
           if (data && typeof data === 'object') {
             setPricingTable(data)
-            try { localStorage.setItem('pricing_table_cache', JSON.stringify({ url, fetchedAt: now, table: data })) } catch {}
+            try { localStorage.setItem('pricing_table_cache', JSON.stringify({ url, fetchedAt: now, table: data })) } catch { /* fill */ }
           }
-        } catch {}
+        } catch { /* fill */ }
       })()
       return () => { cancelled = true }
-    } catch {}
+    } catch { /* fill */ }
   }, [])
 
   const selectedPrompt = useMemo(
@@ -868,7 +866,7 @@ function App() {
         }
         localStorage.setItem(`preview_state_${copy.id}`, JSON.stringify(newMap))
       }
-    } catch {}
+    } catch { /* fill */ }
     // Preserve per-message collapsed state by remapping original IDs to new ones
     try {
       const rawCollapsed = localStorage.getItem(`collapsed_state_${original.id}`)
@@ -882,12 +880,12 @@ function App() {
         }
         localStorage.setItem(`collapsed_state_${copy.id}`, JSON.stringify(newCollapsed))
       }
-    } catch {}
+    } catch { /* fill */ }
     // Preserve Tools panel open/closed state
     try {
       const toolsOpen = localStorage.getItem(`tools_panel_open_${original.id}`)
       if (toolsOpen != null) localStorage.setItem(`tools_panel_open_${copy.id}`, toolsOpen)
-    } catch {}
+    } catch { /* fill */ }
     setPrompts(prev => [copy, ...prev])
     setSelectedId(copy.id)
   }, [prompts])
@@ -1034,7 +1032,7 @@ function App() {
         const id = js?.id || js?.uuid || js?.key
         if (typeof id === 'string' && id) return id
       }
-    } catch {}
+    } catch { /* fill */ }
     // Fallback: PUT /share/:id we generate
     try {
       const id = crypto.randomUUID()
@@ -1044,7 +1042,7 @@ function App() {
         body: JSON.stringify(payload),
       })
       if (put.ok) return id
-    } catch {}
+    } catch { /* fill */ }
     return null
   }
 
@@ -1059,7 +1057,7 @@ function App() {
         apiKey: apiKey || '',
         domain: domain || '',
       }
-    } catch(e) {
+    } catch {
       return { base: '', apiKey: '', domain: '' }
     }
   }
@@ -1087,7 +1085,7 @@ function App() {
         if (host && js.shortCode) return `https://${host}/${js.shortCode}`
       }
       return null
-    } catch(e) {
+    } catch {
       return null
     }
   }
@@ -1113,7 +1111,7 @@ function App() {
     try {
       const json = LZString.decompressFromEncodedURIComponent(b64)
       if (json && typeof json === 'string') return JSON.parse(json)
-    } catch {}
+    } catch { /* fill */ }
     // Fallback: old base64 format
     try {
       const binary = atob(b64)
@@ -1142,7 +1140,7 @@ function App() {
         const id = await uploadSharedPayload(payload)
         if (id) url = `${window.location.origin}${window.location.pathname}#id=${encodeURIComponent(id)}`
       }
-    } catch {}
+    } catch { /* fill */ }
     if (!url) {
       const val = encodeShared(payload)
       const hp = new URLSearchParams()
@@ -1158,7 +1156,7 @@ function App() {
           const shorted = await shortenUrlIfConfigured(url)
           if (shorted) url = shorted
         }
-      } catch {}
+      } catch { /* fill */ }
     }
     try {
       await navigator.clipboard.writeText(url)
@@ -1282,13 +1280,13 @@ function App() {
         const per = b.perPromptUi || {}
         try {
           Object.entries(per).forEach(([pid, ui]) => {
-            try { localStorage.setItem(`preview_state_${pid}`, JSON.stringify(ui?.preview || {})) } catch {}
-            try { localStorage.setItem(`collapsed_state_${pid}`, JSON.stringify(ui?.collapsed || {})) } catch {}
-            try { localStorage.setItem(`run_messages_${pid}`, JSON.stringify(Array.isArray(ui?.runMessages) ? ui.runMessages : [])) } catch {}
-            try { localStorage.setItem(`chat_input_${pid}`, String(ui?.chatInput || '')) } catch {}
-            try { localStorage.setItem(`tools_panel_open_${pid}`, ui?.toolsPanelOpen ? '1' : '0') } catch {}
+            try { localStorage.setItem(`preview_state_${pid}`, JSON.stringify(ui?.preview || {})) } catch { /* fill */ }
+            try { localStorage.setItem(`collapsed_state_${pid}`, JSON.stringify(ui?.collapsed || {})) } catch { /* fill */ }
+            try { localStorage.setItem(`run_messages_${pid}`, JSON.stringify(Array.isArray(ui?.runMessages) ? ui.runMessages : [])) } catch { /* fill */ }
+            try { localStorage.setItem(`chat_input_${pid}`, String(ui?.chatInput || '')) } catch { /* fill */ }
+            try { localStorage.setItem(`tools_panel_open_${pid}`, ui?.toolsPanelOpen ? '1' : '0') } catch { /* fill */ }
           })
-        } catch {}
+        } catch { /* fill */ }
         messageApi.success('Backup restored')
       } catch {
         messageApi.error('Failed to restore backup')
@@ -1348,13 +1346,13 @@ function App() {
           }
           localStorage.setItem(`preview_state_${created.id}`, JSON.stringify(previewMap))
           localStorage.setItem(`collapsed_state_${created.id}`, JSON.stringify(collapsedMap))
-        } catch {}
+        } catch { /* fill */ }
         // Restore Tools panel open/closed state from imported JSON
         try {
           if (typeof data?.toolsPanelOpen === 'boolean') {
             localStorage.setItem(`tools_panel_open_${created.id}`, data.toolsPanelOpen ? '1' : '0')
           }
-        } catch {}
+        } catch { /* fill */ }
         setPrompts(prev => [created, ...prev])
         setSelectedId(created.id)
         messageApi.success('Prompt imported successfully')
@@ -1400,7 +1398,7 @@ function App() {
         url.hash = hp.toString() ? `#${hp.toString()}` : ''
       }
       window.history.replaceState({}, '', url.toString())
-    } catch {}
+    } catch { /* fill */ }
   }
 
   // --- Tool parameters editor helpers ---
@@ -1501,7 +1499,7 @@ function App() {
         const next = updater(Array.isArray(saved) ? saved : [])
         localStorage.setItem(`run_messages_${promptId}`, JSON.stringify(Array.isArray(next) ? next : []))
       }
-    } catch {}
+    } catch { /* fill */ }
   }
 
   function setRunErrorSafely(promptId, text) {
@@ -1515,7 +1513,7 @@ function App() {
       } else {
         localStorage.setItem(`run_stats_${promptId}`, JSON.stringify(stats || null))
       }
-    } catch {}
+    } catch { /* fill */ }
   }
 
   function getPricingTable() {
@@ -1561,7 +1559,7 @@ function App() {
           const cached = JSON.parse(cachedRaw)
           if (cached && cached.table && typeof cached.table === 'object') return cached.table
         }
-      } catch {}
+      } catch { /* fill */ }
       const raw = import.meta.env.VITE_MODEL_PRICING || ''
       if (raw) {
         const obj = JSON.parse(raw)
@@ -1682,7 +1680,7 @@ function App() {
       let schema = {}
       try {
         schema = t.parameters ? JSON.parse(t.parameters) : {}
-      } catch (e) {
+      } catch {
         // ignore invalid schema; send empty
         schema = {}
       }
