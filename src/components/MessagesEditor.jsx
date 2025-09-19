@@ -15,6 +15,7 @@ const MessagesEditor = memo(function MessagesEditor({
   addMessage,
   onDragEndMessages,
   MarkdownBlock,
+  performanceMode = 'standard',
 }) {
   const [hoveredGutterIndex, setHoveredGutterIndex] = useState(null)
   const prevIdsRef = useRef([])
@@ -279,18 +280,34 @@ const MessagesEditor = memo(function MessagesEditor({
         <strong>Messages</strong>
         {/* Performance indicator for development */}
         {process.env.NODE_ENV === 'development' && (
-          <span style={{ 
-            fontSize: '11px', 
-            color: 'var(--muted)', 
-            marginLeft: 8 
+          <span style={{
+            fontSize: '11px',
+            color: 'var(--muted)',
+            marginLeft: 8
           }}>
             ({selectedPrompt.messages.length} msgs, {Math.round(totalContentSize / 1024)}KB)
           </span>
         )}
       </div>
-      
+
+      {performanceMode === 'virtualized' && (
+        <div
+          style={{
+            marginBottom: 8,
+            padding: '6px 10px',
+            borderRadius: 8,
+            background: 'var(--panel)',
+            border: '1px dashed var(--panel-border)',
+            fontSize: 12,
+            color: 'var(--muted)'
+          }}
+        >
+          Virtualized rendering active
+        </div>
+      )}
+
       {renderStandardList()}
-      
+
       <div className="row" style={{ marginTop: 8 }}>
         <Button size="small" onClick={() => addMessage('system')}>+ system</Button>
         <Button size="small" onClick={() => addMessage('user')}>+ user</Button>
