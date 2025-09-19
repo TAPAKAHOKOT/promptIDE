@@ -4,221 +4,15 @@ import { theme as antdTheme } from 'antd'
 import { SunOutlined, MoonOutlined, CopyOutlined, DeleteOutlined, HolderOutlined, DownOutlined, RightOutlined, MenuOutlined, CloseOutlined, CommentOutlined } from '@ant-design/icons'
 import './App.css'
 import logo from './assets/logo.png'
-import LZString from 'lz-string'
 import remarkGfm from 'remark-gfm'
 import rehypeSanitize from 'rehype-sanitize'
 import MessageItem from './components/MessageItem'
 import MessagesEditor from './components/MessagesEditor'
-
-// Optimized debounced localStorage writer hook with compression and dynamic delays
-function useDebouncedLocalStorage(key, value, delay = 1000, enabled = true, options = {}) {
-  const {
-    compressionThreshold = 50000, // 50KB threshold for compression
-    maxDelay = 5000, // Maximum delay for very large content
-    backgroundSync = true, // Enable background serialization
-    autoFlush = true // Auto-flush on unmount/navigation
-  } = options
-
-  const timerRef = useRef(null)
-  const flushRef = useRef(null)
-  const isUnmountingRef = useRef(false)
-
-  // Calculate dynamic delay based on content size
-  const calculateDelay = useCallback((content) => {
-    if (!content) return delay
-    
-    const size = typeof content === 'string' ? content.length : JSON.stringify(content).length
-    
-    // Increase delay for larger content to reduce save frequency
-    if (size > 100000) return Math.min(maxDelay, delay * 3) // 100KB+
-    if (size > 50000) return Math.min(maxDelay, delay * 2)  // 50KB+
-    if (size > 10000) return Math.min(maxDelay, delay * 1.5) // 10KB+
-    
-    return delay
-  }, [delay, maxDelay])
-
-  // Background serialization to prevent UI blocking
-  const serializeInBackground = useCallback((data) => {
-    return new Promise((resolve) => {
-      if (!backgroundSync) {
-        // Synchronous fallback
-        const str = typeof data === 'string' ? data : JSON.stringify(data)
-        resolve(str)
-        return
-      }
-
-      // Use setTimeout to yield to the event loop
-      setTimeout(() => {
-        try {
-          const str = typeof data === 'string' ? data : JSON.stringify(data)
-          resolve(str)
-        } catch (error) {
-          console.warn('Serialization failed:', error)
-          resolve(null)
-        }
-      }, 0)
-    })
-  }, [backgroundSync])
-
-  // Compression logic for large content
-  const compressIfNeeded = useCallback((str) => {
-    if (!str || str.length < compressionThreshold) {
-      return { data: str, compressed: false }
-    }
-
-    try {
-      const compressed = LZString.compress(str)
-      // Only use compression if it actually reduces size significantly
-      if (compressed && compressed.length < str.length * 0.8) {
-        return { data: compressed, compressed: true }
-      }
-    } catch (error) {
-      console.warn('Compression failed:', error)
-    }
-
-    return { data: str, compressed: false }
-  }, [compressionThreshold])
-
-  // Flush function for immediate saves
-  const flush = useCallback(async () => {
-    if (!enabled || !key || isUnmountingRef.current) return
-
-    try {
-      const serialized = await serializeInBackground(value)
-      if (!serialized) return
-
-      const { data, compressed } = compressIfNeeded(serialized)
-      
-      // Store with metadata about compression
-      const storageData = compressed 
-        ? JSON.stringify({ __compressed: true, data })
-        : data
-
-      localStorage.setItem(key, storageData)
-      
-      if (compressed) {
-        console.debug(`Saved ${key} with compression: ${serialized.length} -> ${data.length} bytes`)
-      }
-    } catch (error) {
-      console.warn('Failed to flush to localStorage:', error)
-    }
-  }, [enabled, key, value, serializeInBackground, compressIfNeeded])
-
-  // Store flush function in ref for cleanup
-  flushRef.current = flush
-
-  useEffect(() => {
-    if (!enabled || !key) return
-
-    // Clear existing timer
-    if (timerRef.current) {
-      clearTimeout(timerRef.current)
-    }
-
-    const snapshot = value
-    const dynamicDelay = calculateDelay(snapshot)
-
-    timerRef.current = setTimeout(async () => {
-      if (isUnmountingRef.current) return
-
-      try {
-        const serialized = await serializeInBackground(snapshot)
-        if (!serialized || isUnmountingRef.current) return
-
-        const { data, compressed } = compressIfNeeded(serialized)
-        
-        // Store with metadata about compression
-        const storageData = compressed 
-          ? JSON.stringify({ __compressed: true, data })
-          : data
-
-        localStorage.setItem(key, storageData)
-        
-        if (compressed) {
-          console.debug(`Auto-saved ${key} with compression: ${serialized.length} -> ${data.length} bytes`)
-        }
-      } catch (error) {
-        console.warn('Auto-save failed:', error)
-      }
-    }, dynamicDelay)
-
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current)
-      }
-    }
-  }, [key, value, enabled, calculateDelay, serializeInBackground, compressIfNeeded])
-
-  // Auto-flush on unmount/navigation
-  useEffect(() => {
-    if (!autoFlush) return
-
-    const handleBeforeUnload = () => {
-      isUnmountingRef.current = true
-      if (flushRef.current) {
-        // Synchronous flush for beforeunload
-        try {
-          const str = typeof value === 'string' ? value : JSON.stringify(value)
-          const { data, compressed } = compressIfNeeded(str)
-          const storageData = compressed 
-            ? JSON.stringify({ __compressed: true, data })
-            : data
-          localStorage.setItem(key, storageData)
-        } catch (error) {
-          console.warn('Emergency flush failed:', error)
-        }
-      }
-    }
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden' && flushRef.current) {
-        flushRef.current()
-      }
-    }
-
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-
-    return () => {
-      isUnmountingRef.current = true
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-      
-      // Final cleanup flush
-      if (flushRef.current && enabled && key) {
-        flushRef.current()
-      }
-    }
-  }, [autoFlush, key, enabled, value, compressIfNeeded])
-
-  return { flush }
-}
-
-// Helper function to read potentially compressed data from localStorage
-function getFromLocalStorage(key, defaultValue = null) {
-  try {
-    const stored = localStorage.getItem(key)
-    if (!stored) return defaultValue
-
-    // Try to parse as JSON first (might be compressed data with metadata)
-    try {
-      const parsed = JSON.parse(stored)
-      if (parsed && typeof parsed === 'object' && parsed.__compressed === true) {
-        // Decompress the data
-        const decompressed = LZString.decompress(parsed.data)
-        return decompressed ? JSON.parse(decompressed) : defaultValue
-      }
-      // Regular JSON data
-      return parsed
-    } catch {
-      // Not JSON, return as string
-      return stored
-    }
-  } catch (error) {
-    console.warn(`Failed to read from localStorage key "${key}":`, error)
-    return defaultValue
-  }
-}
+import useDebouncedLocalStorage from './hooks/useDebouncedLocalStorage'
+import { getFromLocalStorage } from './lib/storage'
+import { encodeShared, decodeShared, fetchSharedById, uploadSharedPayload, shortenWithShlink, shortenUrlIfConfigured, getShareBase } from './lib/share'
+import { ensurePricingTable, getPricingTable as resolvePricingTable, estimateCostUSD, parsePricingTable, readPricingCache } from './lib/pricing'
+import { mapToolsForOpenAI, callOpenAI } from './lib/openai'
 
 // Lazy-load DnD on demand
 function useDnd() {
@@ -642,7 +436,17 @@ function App() {
   const selectedIdRef = useRef(null)
   const [isSiderCollapsed, setIsSiderCollapsed] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
-  const [pricingTable, setPricingTable] = useState(null)
+  const [pricingTable, setPricingTable] = useState(() => {
+    const cached = readPricingCache()
+    return cached && typeof cached.table === 'object' ? cached.table : null
+  })
+  const envPricingTable = useMemo(() => {
+    try {
+      return parsePricingTable(import.meta.env.VITE_MODEL_PRICING || '')
+    } catch {
+      return null
+    }
+  }, [])
 
   // Predefined model options for Selects
   const presetModelOptions = useMemo(() => ([
@@ -800,38 +604,27 @@ function App() {
   // Keep a ref of currently selected prompt id for race-safe updates during async runs
   useEffect(() => { selectedIdRef.current = selectedId }, [selectedId])
 
+  const getResolvedPricingTable = useCallback(
+    () => resolvePricingTable({ preferred: pricingTable, envTable: envPricingTable }),
+    [pricingTable, envPricingTable]
+  )
+
+  const computeCostUSD = useCallback(
+    (modelId, usage) => estimateCostUSD(modelId, usage, getResolvedPricingTable()),
+    [getResolvedPricingTable]
+  )
+
   // Fetch pricing table from configurable URL and cache in localStorage (24h TTL)
   useEffect(() => {
-    try {
-      const url = import.meta.env.VITE_MODEL_PRICING_URL || ''
-      if (!url) return
-      let cancelled = false
-      const TTL = 24 * 60 * 60 * 1000
-      const now = Date.now()
-      try {
-        const cachedRaw = localStorage.getItem('pricing_table_cache')
-        if (cachedRaw) {
-          const cached = JSON.parse(cachedRaw)
-          if (cached && cached.url === url && cached.fetchedAt && (now - cached.fetchedAt) < TTL && cached.table && typeof cached.table === 'object') {
-            setPricingTable(cached.table)
-            return
-          }
-        }
-      } catch { /* fill */ }
-      ;(async () => {
-        try {
-          const res = await fetch(url, { headers: { 'Accept': 'application/json' } })
-          if (!res.ok) return
-          const data = await res.json().catch(() => null)
-          if (cancelled) return
-          if (data && typeof data === 'object') {
-            setPricingTable(data)
-            try { localStorage.setItem('pricing_table_cache', JSON.stringify({ url, fetchedAt: now, table: data })) } catch { /* fill */ }
-          }
-        } catch { /* fill */ }
-      })()
-      return () => { cancelled = true }
-    } catch { /* fill */ }
+    const url = import.meta.env.VITE_MODEL_PRICING_URL || ''
+    if (!url) return undefined
+    let cancelled = false
+    ensurePricingTable(url).then(({ table }) => {
+      if (!cancelled && table && typeof table === 'object') {
+        setPricingTable(table)
+      }
+    }).catch(() => {})
+    return () => { cancelled = true }
   }, [])
 
   const selectedPrompt = useMemo(
@@ -973,156 +766,6 @@ function App() {
       return { ...p, messages: next }
     }))
   }, [selectedId, reorder])
-
-  // --- Export / Import helpers ---
-  function encodeShared(obj) {
-    try {
-      const json = JSON.stringify(obj)
-      const compressed = LZString.compressToEncodedURIComponent(json)
-      if (compressed && compressed.length > 0) return compressed
-      // Fallback to base64 if compression fails
-      const bytes = new TextEncoder().encode(json)
-      let binary = ''
-      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
-      return btoa(binary)
-    } catch {
-      return ''
-    }
-  }
-
-  // Optional share service helpers (short links via UUID)
-  function getShareBase() {
-    try {
-      const base = import.meta.env.VITE_SHARE_BASE_URL || ''
-      return base ? String(base).replace(/\/+$/g, '') : ''
-    } catch {
-      return ''
-    }
-  }
-
-  async function fetchSharedById(id) {
-    const base = getShareBase()
-    if (!base || !id) return null
-    try {
-      const res = await fetch(`${base}/share/${encodeURIComponent(id)}`)
-      if (!res.ok) return null
-      // Expect either raw payload or { data: payload }
-      const body = await res.json().catch(() => null)
-      if (!body) return null
-      if (body && typeof body === 'object' && (body.kind || body.messages || body.run || body.tools)) return body
-      if (body && typeof body === 'object' && body.data) return body.data
-      return null
-    } catch {
-      return null
-    }
-  }
-
-  async function uploadSharedPayload(payload) {
-    const base = getShareBase()
-    if (!base || !payload) return null
-    // Try POST /share -> { id }
-    try {
-      const res = await fetch(`${base}/share`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      if (res.ok) {
-        const js = await res.json().catch(() => null)
-        const id = js?.id || js?.uuid || js?.key
-        if (typeof id === 'string' && id) return id
-      }
-    } catch { /* fill */ }
-    // Fallback: PUT /share/:id we generate
-    try {
-      const id = crypto.randomUUID()
-      const put = await fetch(`${base}/share/${encodeURIComponent(id)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      if (put.ok) return id
-    } catch { /* fill */ }
-    return null
-  }
-
-  // Shlink config + shortener (preferred over generic shortener when present)
-  function getShlinkConfig() {
-    try {
-      const base = import.meta.env.VITE_SHLINK_BASE_URL || ''
-      const apiKey = import.meta.env.VITE_SHLINK_API_KEY || ''
-      const domain = import.meta.env.VITE_SHLINK_DOMAIN || ''
-      return {
-        base: base ? String(base).replace(/\/+$/g, '') : '',
-        apiKey: apiKey || '',
-        domain: domain || '',
-      }
-    } catch {
-      return { base: '', apiKey: '', domain: '' }
-    }
-  }
-
-  async function shortenWithShlink(longUrl) {
-    try {
-      const { base, apiKey, domain } = getShlinkConfig()
-      if (!base || !apiKey) return null
-      const res = await fetch(`${base}/rest/v3/short-urls`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Api-Key': apiKey,
-        },
-        body: JSON.stringify({ longUrl, findIfExists: true, ...(domain ? { domain } : {}) }),
-      })
-      if (!res.ok) return null
-      const js = await res.json().catch(() => null)
-      if (!js) return null
-      if (typeof js === 'string' && /^https?:\/\//i.test(js)) return js
-      if (typeof js?.shortUrl === 'string' && /^https?:\/\//i.test(js.shortUrl)) return js.shortUrl
-      if (js?.shortUrl && typeof js.shortUrl.shortUrl === 'string') return js.shortUrl.shortUrl
-      if (js?.shortCode) {
-        const host = domain || ((() => { try { return new URL(base).host } catch { return '' } })())
-        if (host && js.shortCode) return `https://${host}/${js.shortCode}`
-      }
-      return null
-    } catch {
-      return null
-    }
-  }
-
-  // Optional external shortener for long URLs (no backend). Expects plain-text short URL response
-  async function shortenUrlIfConfigured(longUrl) {
-    try {
-      const base = import.meta.env.VITE_SHORTENER_BASE || ''
-      if (!base) return null
-      const endpoint = `${String(base).replace(/\/+$/g, '')}?url=${encodeURIComponent(longUrl)}`
-      const res = await fetch(endpoint)
-      if (!res.ok) return null
-      const text = (await res.text()).trim()
-      if (text && /^https?:\/\//i.test(text)) return text
-      return null
-    } catch {
-      return null
-    }
-  }
-
-  function decodeShared(b64) {
-    // Prefer LZString first (new format)
-    try {
-      const json = LZString.decompressFromEncodedURIComponent(b64)
-      if (json && typeof json === 'string') return JSON.parse(json)
-    } catch { /* fill */ }
-    // Fallback: old base64 format
-    try {
-      const binary = atob(b64)
-      const bytes = new Uint8Array(binary.length)
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-      const json = new TextDecoder().decode(bytes)
-      return JSON.parse(json)
-    } catch {
-      return null
-    }
-  }
 
   async function copyPromptLink() {
     if (!selectedPrompt) return
@@ -1516,108 +1159,6 @@ function App() {
     } catch { /* fill */ }
   }
 
-  function getPricingTable() {
-    try {
-      // Prices below are converted from per 1M tokens to per 1K tokens
-      // input -> prompt, output -> completion, cached -> cached
-      const HARDCODED_PRICING = {
-        'gpt-5': { prompt: 0.00125, cached: 0.000125, completion: 0.010 },
-        'gpt-5-mini': { prompt: 0.00025, cached: 0.000025, completion: 0.002 },
-        'gpt-5-nano': { prompt: 0.00005, cached: 0.000005, completion: 0.0004 },
-        'gpt-5-chat-latest': { prompt: 0.00125, cached: 0.000125, completion: 0.010 },
-        'gpt-4.1': { prompt: 0.002, cached: 0.0005, completion: 0.008 },
-        'gpt-4.1-mini': { prompt: 0.0004, cached: 0.0001, completion: 0.0016 },
-        'gpt-4.1-nano': { prompt: 0.0001, cached: 0.000025, completion: 0.0004 },
-        'gpt-4o': { prompt: 0.0025, cached: 0.00125, completion: 0.010 },
-        'gpt-4o-2024-05-13': { prompt: 0.005, completion: 0.015 },
-        'gpt-4o-mini': { prompt: 0.00015, cached: 0.000075, completion: 0.0006 },
-        'gpt-realtime': { prompt: 0.004, cached: 0.0004, completion: 0.016 },
-        'gpt-4o-realtime-preview': { prompt: 0.005, cached: 0.0025, completion: 0.020 },
-        'gpt-4o-mini-realtime-preview': { prompt: 0.0006, cached: 0.0003, completion: 0.0024 },
-        'gpt-audio': { prompt: 0.0025, completion: 0.010 },
-        'gpt-4o-audio-preview': { prompt: 0.0025, completion: 0.010 },
-        'gpt-4o-mini-audio-preview': { prompt: 0.00015, completion: 0.0006 },
-        'o1': { prompt: 0.015, cached: 0.0075, completion: 0.060 },
-        'o1-pro': { prompt: 0.150, completion: 0.600 },
-        'o3-pro': { prompt: 0.020, completion: 0.080 },
-        'o3': { prompt: 0.002, cached: 0.0005, completion: 0.008 },
-        'o3-deep-research': { prompt: 0.010, cached: 0.0025, completion: 0.040 },
-        'o4-mini': { prompt: 0.00110, cached: 0.000275, completion: 0.00440 },
-        'o4-mini-deep-research': { prompt: 0.0020, cached: 0.0005, completion: 0.0080 },
-        'o3-mini': { prompt: 0.00110, cached: 0.00055, completion: 0.00440 },
-        'o1-mini': { prompt: 0.00110, cached: 0.00055, completion: 0.00440 },
-        'codex-mini-latest': { prompt: 0.00150, cached: 0.000375, completion: 0.00600 },
-        'gpt-4o-mini-search-preview': { prompt: 0.00015, completion: 0.0006 },
-        'gpt-4o-search-preview': { prompt: 0.0025, completion: 0.010 },
-        'computer-use-preview': { prompt: 0.003, completion: 0.012 },
-        'gpt-image-1': { prompt: 0.005 },
-      }
-      if (pricingTable && typeof pricingTable === 'object') return pricingTable
-      try {
-        const cachedRaw = localStorage.getItem('pricing_table_cache')
-        if (cachedRaw) {
-          const cached = JSON.parse(cachedRaw)
-          if (cached && cached.table && typeof cached.table === 'object') return cached.table
-        }
-      } catch { /* fill */ }
-      const raw = import.meta.env.VITE_MODEL_PRICING || ''
-      if (raw) {
-        const obj = JSON.parse(raw)
-        if (obj && typeof obj === 'object') return obj
-      }
-      return HARDCODED_PRICING
-    } catch {
-      return null
-    }
-  }
-
-  function estimateCostUSD(modelId, usage) {
-    try {
-      if (!usage) return NaN
-      const table = getPricingTable()
-      if (!table) return NaN
-      const key = String(modelId || '')
-      const lower = key.toLowerCase()
-      let entry = table[key] || table[lower] || null
-      if (!entry) {
-        // Try stripping date/version suffixes like -2024-05-13
-        const noDate = lower.replace(/-20\d{2}-\d{2}-\d{2}.*/, '')
-        entry = table[noDate] || entry
-      }
-      if (!entry) {
-        // Try removing common suffixes
-        const candidates = [
-          lower.replace(/-latest$/, ''),
-          lower.replace(/-preview$/, ''),
-          lower.replace(/-chat-latest$/, ''),
-        ].filter(Boolean)
-        for (const c of candidates) {
-          if (table[c]) { entry = table[c]; break }
-        }
-      }
-      if (!entry) {
-        // Longest prefix match (case-insensitive)
-        const keys = Object.keys(table)
-        let best = ''
-        for (const k of keys) {
-          const kl = k.toLowerCase()
-          if (lower.startsWith(kl) && kl.length > best.length) best = k
-        }
-        if (best) entry = table[best]
-      }
-      if (!entry || (entry.prompt == null && entry.input == null)) return NaN
-      const promptRate = Number(entry.prompt ?? entry.input)
-      const completionRate = Number(entry.completion ?? entry.output ?? entry.prompt ?? entry.input)
-      if (!(promptRate >= 0) || !(completionRate >= 0)) return NaN
-      const pt = Number(usage.prompt_tokens || 0)
-      const ct = Number(usage.completion_tokens || 0)
-      const cost = (pt / 1000) * promptRate + (ct / 1000) * completionRate
-      return Number.isFinite(cost) ? cost : NaN
-    } catch {
-      return NaN
-    }
-  }
-
   useEffect(() => {
     if (selectedPrompt) {
       // load saved assistant-only transcript for this prompt; default to empty (with compression support)
@@ -1672,79 +1213,6 @@ function App() {
     }
   }
 
-  function mapToolsForOpenAI(p) {
-    const tools = (p.tools || []).filter(t => t && t.name && t.enabled !== false)
-    if (!tools.length) return undefined
-    const mapped = []
-    for (const t of tools) {
-      let schema = {}
-      try {
-        schema = t.parameters ? JSON.parse(t.parameters) : {}
-      } catch {
-        // ignore invalid schema; send empty
-        schema = {}
-      }
-      mapped.push({
-        type: 'function',
-        function: {
-          name: t.name,
-          description: t.description || '',
-          parameters: schema,
-        }
-      })
-    }
-    return mapped
-  }
-
-  async function callOpenAI(messages, tools) {
-    if (!apiKey) {
-      return { assistant: null, error: 'Enter OpenAI API Key in the sidebar', usage: null, model: model || '' }
-    }
-    try {
-      const payload = {
-        model: model || 'gpt-4o-mini',
-        messages: messages
-          .filter(m => m.role !== 'comment')
-          .filter(m => m.enabled !== false)
-          .map(m => ({ role: m.role, content: m.content })),
-      }
-      if (tools) {
-        payload.tools = tools
-        payload.tool_choice = 'auto'
-      }
-      const res = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify(payload),
-      })
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(`HTTP ${res.status}: ${text}`)
-      }
-      const data = await res.json()
-      const choice = data.choices && data.choices[0]
-      const msg = choice?.message
-      if (!msg) throw new Error('Empty response from model')
-      return {
-        assistant: {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: msg.content || '',
-          tool_calls: msg.tool_calls || [],
-        },
-        error: '',
-        usage: data.usage || null,
-        model: data.model || (model || '')
-      }
-    } catch (e) {
-      const hint = 'Note: the key is unsafe on the frontend, and CORS may block requests. Use a proxy/backend if you have problems.'
-      return { assistant: null, error: `${e.message}\n${hint}`, usage: null, model: model || '' }
-    }
-  }
-
   async function runPrompt() {
     if (!selectedPrompt) return
     const originId = selectedPrompt.id
@@ -1756,12 +1224,12 @@ function App() {
       const base = selectedPrompt.messages || []
       const loadingId = crypto.randomUUID()
       updateRunMessagesSafely(originId, () => [{ id: loadingId, role: 'assistant', content: '', loading: true }])
-      const { assistant, error, usage, model: usedModel } = await callOpenAI(base, tools)
+    const { assistant, error, usage, model: usedModel } = await callOpenAI({ apiKey, model, messages: base, tools })
       updateRunMessagesSafely(originId, prev => prev.filter(m => m.id !== loadingId))
       if (assistant) updateRunMessagesSafely(originId, prev => [...prev, assistant])
       if (error) setRunErrorSafely(originId, error)
       const elapsedMs = Date.now() - startedAt
-      const costUSD = estimateCostUSD(usedModel || model, usage)
+      const costUSD = computeCostUSD(usedModel || model, usage)
       setRunStatsSafely(originId, { startedAt, elapsedMs, usage, costUSD, model: usedModel || model })
     } finally {
       setIsRunning(false)
@@ -1784,12 +1252,12 @@ function App() {
       const startedAt = Date.now()
       const loadingId = crypto.randomUUID()
       updateRunMessagesSafely(originId, () => [{ id: loadingId, role: 'assistant', content: '', loading: true }])
-      const { assistant, error, usage, model: usedModel } = await callOpenAI([...next], tools)
+      const { assistant, error, usage, model: usedModel } = await callOpenAI({ apiKey, model, messages: next, tools })
       updateRunMessagesSafely(originId, prev => prev.filter(m => m.id !== loadingId))
       if (assistant) updateRunMessagesSafely(originId, prev => [...prev, assistant])
       if (error) setRunErrorSafely(originId, error)
       const elapsedMs = Date.now() - startedAt
-      const costUSD = estimateCostUSD(usedModel || model, usage)
+      const costUSD = computeCostUSD(usedModel || model, usage)
       setRunStatsSafely(originId, { startedAt, elapsedMs, usage, costUSD, model: usedModel || model })
     } finally {
       setIsRunning(false)
