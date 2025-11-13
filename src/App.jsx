@@ -440,75 +440,137 @@ const ToolsEditor = memo(function ToolsEditor({
           )}
         >
           <div className="col">
-            {(selectedPrompt.tools || []).map((t, i) => (
-              <div key={i} className="panel" style={{ opacity: t.enabled !== false ? 1 : 0.5 }}>
-                <div className="row" style={{ marginBottom: 6 }}>
-                  <Input value={t.name} onChange={e => updateTool(i, { name: e.target.value })} placeholder="Tool name" />
-                  <Switch size="small" checked={t.enabled !== false} onChange={val => updateTool(i, { enabled: val })} />
-                  <Popconfirm
-                    title="Delete tool?"
-                    okText="Delete"
-                    cancelText="Cancel"
-                    onConfirm={() => removeTool(i)}
-                  >
-                    <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
-                  </Popconfirm>
-                </div>
-                <Input value={t.description} onChange={e => updateTool(i, { description: e.target.value })} placeholder="Description" />
-                <div style={{ marginTop: 8, borderTop: '1px dashed var(--panel-border)', paddingTop: 8 }}>
-                  <div className="row" style={{ marginBottom: 6 }}>
-                    <strong>Parameters</strong>
-                    <Button size="small" onClick={() => addParam(i)}>+ parameter</Button>
+            {(selectedPrompt.tools || []).map((t, i) => {
+              const mode = t?.mode === 'json' ? 'json' : 'form'
+              const isJsonMode = mode === 'json'
+              const parameterFields = isJsonMode ? [] : parseParamsToFields(t.parameters || '')
+              const rawJsonValue = typeof t?.rawJson === 'string' ? t.rawJson : ''
+              return (
+                <div key={i} className="panel" style={{ opacity: t.enabled !== false ? 1 : 0.5 }}>
+                  <div className="row" style={{ marginBottom: 6, gap: 8 }}>
+                    <Input
+                      value={t.name}
+                      onChange={e => updateTool(i, { name: e.target.value })}
+                      placeholder="Tool name"
+                      disabled={isJsonMode}
+                    />
+                    <Segmented
+                      size="small"
+                      value={mode}
+                      onChange={(val) => {
+                        if (val === 'json') {
+                          let defaultJson = rawJsonValue
+                          if (!defaultJson) {
+                            let parsedParams = {}
+                            try {
+                              parsedParams = t.parameters ? JSON.parse(t.parameters) : {}
+                            } catch {
+                              parsedParams = {}
+                            }
+                            defaultJson = JSON.stringify({
+                              type: 'function',
+                              function: {
+                                name: t.name || 'toolName',
+                                description: t.description || '',
+                                parameters: parsedParams || {}
+                              }
+                            }, null, 2)
+                          }
+                          updateTool(i, { mode: 'json', rawJson: defaultJson })
+                        } else {
+                          updateTool(i, { mode: 'form' })
+                        }
+                      }}
+                      options={[
+                        { label: 'Form', value: 'form' },
+                        { label: 'JSON', value: 'json' },
+                      ]}
+                    />
+                    <Switch size="small" checked={t.enabled !== false} onChange={val => updateTool(i, { enabled: val })} />
+                    <Popconfirm
+                      title="Delete tool?"
+                      okText="Delete"
+                      cancelText="Cancel"
+                      onConfirm={() => removeTool(i)}
+                    >
+                      <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete" />
+                    </Popconfirm>
                   </div>
-                  <div className="col">
-                    {parseParamsToFields(t.parameters || '').map((f, fi) => (
-                      <div key={fi} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
-                        <div className="tool-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 160px 140px 80px', gap: 8, alignItems: 'center' }}>
-                          <Input
-                            value={f.key}
-                            onChange={e => updateParam(i, fi, { key: e.target.value })}
-                            placeholder="name"
-                          />
-                          <Select
-                            value={f.type}
-                            onChange={val => updateParam(i, fi, { type: val })}
-                            options={[
-                              { value: 'string', label: 'string' },
-                              { value: 'number', label: 'number' },
-                              { value: 'integer', label: 'integer' },
-                              { value: 'boolean', label: 'boolean' },
-                            ]}
-                          />
-                          <Checkbox
-                            checked={!!f.required}
-                            onChange={e => updateParam(i, fi, { required: e.target.checked })}
-                          >required</Checkbox>
-                          <Popconfirm
-                            title="Delete parameter?"
-                            okText="Delete"
-                            cancelText="Cancel"
-                            onConfirm={() => removeParam(i, fi)}
-                          >
-                            <Button type="text" size="small" danger icon={<DeleteOutlined />} title="Delete" />
-                          </Popconfirm>
-                        </div>
-                        <Input
-                          value={f.description}
-                          onChange={e => updateParam(i, fi, { description: e.target.value })}
-                          placeholder="description"
-                          style={{ marginTop: 6 }}
-                        />
+                  <Input
+                    value={t.description}
+                    onChange={e => updateTool(i, { description: e.target.value })}
+                    placeholder="Description"
+                    disabled={isJsonMode}
+                  />
+                  {isJsonMode ? (
+                    <div className="col" style={{ marginTop: 8, gap: 6 }}>
+                      <Input.TextArea
+                        value={rawJsonValue}
+                        onChange={e => updateTool(i, { rawJson: e.target.value })}
+                        placeholder="Paste complete tool JSON"
+                        autoSize={{ minRows: 6, maxRows: 16 }}
+                      />
+                      <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                        This JSON will be sent to the model exactly as provided.
                       </div>
-                    ))}
-                  </div>
-                  <Collapse style={{ marginTop: 8 }}>
-                    <Collapse.Panel header="Advanced (view JSON schema)" key="1">
-                      <pre style={{ whiteSpace: 'pre-wrap' }}>{t.parameters || ''}</pre>
-                    </Collapse.Panel>
-                  </Collapse>
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 8, borderTop: '1px dashed var(--panel-border)', paddingTop: 8 }}>
+                      <div className="row" style={{ marginBottom: 6 }}>
+                        <strong>Parameters</strong>
+                        <Button size="small" onClick={() => addParam(i)}>+ parameter</Button>
+                      </div>
+                      <div className="col">
+                        {parameterFields.map((f, fi) => (
+                          <div key={fi} className="panel" style={{ borderColor: 'var(--panel-border)' }}>
+                            <div className="tool-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 160px 140px 80px', gap: 8, alignItems: 'center' }}>
+                              <Input
+                                value={f.key}
+                                onChange={e => updateParam(i, fi, { key: e.target.value })}
+                                placeholder="name"
+                              />
+                              <Select
+                                value={f.type}
+                                onChange={val => updateParam(i, fi, { type: val })}
+                                options={[
+                                  { value: 'string', label: 'string' },
+                                  { value: 'number', label: 'number' },
+                                  { value: 'integer', label: 'integer' },
+                                  { value: 'boolean', label: 'boolean' },
+                                ]}
+                              />
+                              <Checkbox
+                                checked={!!f.required}
+                                onChange={e => updateParam(i, fi, { required: e.target.checked })}
+                              >required</Checkbox>
+                              <Popconfirm
+                                title="Delete parameter?"
+                                okText="Delete"
+                                cancelText="Cancel"
+                                onConfirm={() => removeParam(i, fi)}
+                              >
+                                <Button type="text" size="small" danger icon={<DeleteOutlined />} title="Delete" />
+                              </Popconfirm>
+                            </div>
+                            <Input
+                              value={f.description}
+                              onChange={e => updateParam(i, fi, { description: e.target.value })}
+                              placeholder="description"
+                              style={{ marginTop: 6 }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <Collapse style={{ marginTop: 8 }}>
+                        <Collapse.Panel header="Advanced (view JSON schema)" key="1">
+                          <pre style={{ whiteSpace: 'pre-wrap' }}>{t.parameters || ''}</pre>
+                        </Collapse.Panel>
+                      </Collapse>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </Collapse.Panel>
       </Collapse>
@@ -604,6 +666,48 @@ function newPrompt(overrides = {}) {
     tools: [], // {name, description, parameters (json schema string)}
     ...overrides,
   }
+}
+
+function normalizeToolCallForStorage(tc, fallbackId = '') {
+  if (!tc) {
+    return {
+      id: fallbackId || '',
+      name: '',
+      arguments: '',
+      type: 'function',
+    }
+  }
+  const id = tc.id || tc.tool_call_id || fallbackId || ''
+  const type = tc.type || 'function'
+  let name = ''
+  let args = ''
+  if (tc.function && typeof tc.function === 'object') {
+    name = tc.function.name || ''
+    args = tc.function.arguments
+  } else {
+    name = tc.name || ''
+    args = tc.arguments
+  }
+  if (args && typeof args !== 'string') {
+    try {
+      args = JSON.stringify(args)
+    } catch {
+      args = String(args)
+    }
+  }
+  return {
+    id: id || '',
+    name: name || '',
+    arguments: args || '',
+    type,
+  }
+}
+
+function collectToolCalls(message) {
+  const raw = Array.isArray(message?.toolCalls)
+    ? message.toolCalls
+    : (Array.isArray(message?.tool_calls) ? message.tool_calls : [])
+  return raw.map((tc, idx) => normalizeToolCallForStorage(tc, `tool_call_${idx}`))
 }
 
 function App() {
@@ -851,7 +955,7 @@ function App() {
     const copy = newPrompt({
       title: original.title + ' (copy)',
       messages: original.messages.map(m => ({ ...m, id: crypto.randomUUID() })),
-      tools: original.tools ? [...original.tools] : [],
+      tools: original.tools ? original.tools.map(t => ({ ...t })) : [],
     })
     // Preserve per-message preview state by remapping original IDs to new ones
     try {
@@ -902,6 +1006,13 @@ function App() {
   const addMessage = useCallback((role = 'user', index = null) => {
     if (!selectedPrompt) return
     const msg = { id: crypto.randomUUID(), role, content: '', enabled: true }
+    if (role === 'assistant') {
+      msg.toolCalls = []
+    }
+    if (role === 'tool') {
+      msg.toolCallId = ''
+      msg.toolName = ''
+    }
     updateSelected(p => {
       const next = [...p.messages]
       if (index == null || index < 0 || index > next.length) {
@@ -926,7 +1037,14 @@ function App() {
   }, [updateSelected])
 
   const addTool = useCallback(() => {
-    const tool = { name: 'toolName', description: '', parameters: '{"type":"object","properties":{}}', enabled: true }
+    const tool = {
+      name: 'toolName',
+      description: '',
+      parameters: '{"type":"object","properties":{}}',
+      enabled: true,
+      mode: 'form',
+      rawJson: ''
+    }
     updateSelected(p => ({ ...p, tools: [...(p.tools || []), tool] }))
   }, [updateSelected])
 
@@ -1174,14 +1292,25 @@ function App() {
         kind: 'prompt',
         version: 2,
         title: selectedPrompt.title || 'Untitled',
-        messages: (selectedPrompt.messages || []).map(m => ({
-          role: m?.role || 'user',
-          content: m?.content || '',
-          enabled: m?.enabled !== false,
-          preview: !!previewByMessageId[m?.id],
-          collapsed: !!collapsedByMessageId[m?.id],
-          label: m?.label || '',
-        })),
+        messages: (selectedPrompt.messages || []).map(m => {
+          const serialized = {
+            role: m?.role || 'user',
+            content: m?.content || '',
+            enabled: m?.enabled !== false,
+            preview: !!previewByMessageId[m?.id],
+            collapsed: !!collapsedByMessageId[m?.id],
+            label: m?.label || '',
+          }
+          if (serialized.role === 'assistant') {
+            const calls = collectToolCalls(m)
+            serialized.toolCalls = calls
+          }
+          if (serialized.role === 'tool') {
+            serialized.toolCallId = m?.toolCallId || m?.tool_call_id || ''
+            serialized.toolName = m?.toolName || m?.name || ''
+          }
+          return serialized
+        }),
         tools: (selectedPrompt.tools || []).map(t => ({
           name: t?.name || 'toolName',
           description: t?.description || '',
@@ -1317,15 +1446,29 @@ function App() {
         const data = JSON.parse(text)
         const messages = Array.isArray(data?.messages) ? data.messages : []
         const tools = Array.isArray(data?.tools) ? data.tools : []
-        const createdMessages = messages.map(m => ({
-          id: crypto.randomUUID(),
-          role: m?.role || 'user',
-          content: m?.content || '',
-          enabled: m?.enabled !== false,
-          __preview: !!m?.preview,
-          __collapsed: !!m?.collapsed,
-          label: typeof m?.label === 'string' ? m.label : '',
-        }))
+        const createdMessages = messages.map((m, index) => {
+          const role = m?.role || 'user'
+          const base = {
+            id: crypto.randomUUID(),
+            role,
+            content: m?.content || '',
+            enabled: m?.enabled !== false,
+            __preview: !!m?.preview,
+            __collapsed: !!m?.collapsed,
+            label: typeof m?.label === 'string' ? m.label : '',
+          }
+          if (role === 'assistant') {
+            const raw = Array.isArray(m?.toolCalls)
+              ? m.toolCalls
+              : (Array.isArray(m?.tool_calls) ? m.tool_calls : [])
+            base.toolCalls = raw.map((tc, idx) => normalizeToolCallForStorage(tc, `tool_call_${index}_${idx}`))
+          }
+          if (role === 'tool') {
+            base.toolCallId = m?.toolCallId || m?.tool_call_id || ''
+            base.toolName = m?.toolName || m?.name || ''
+          }
+          return base
+        })
         const created = newPrompt({
           title: (typeof data?.title === 'string' && data.title.trim()) ? data.title.trim() : 'Imported Prompt',
           messages: createdMessages.map(({ __preview, ...rest }) => rest),
@@ -1440,8 +1583,10 @@ function App() {
 
   function addParam(index) {
     updateSelected(p => {
-      const tools = [...(p.tools || [])]
-      const t = { ...(tools[index] || {}) }
+      const tools = Array.isArray(p.tools) ? [...p.tools] : []
+      const original = tools[index]
+      if (!original || original.mode === 'json') return p
+      const t = { ...original }
       const existing = parseParamsToFields(t.parameters || '')
       const baseName = 'param'
       let name = baseName
@@ -1457,8 +1602,10 @@ function App() {
 
   function updateParam(index, fieldIndex, patch) {
     updateSelected(p => {
-      const tools = [...(p.tools || [])]
-      const t = { ...(tools[index] || {}) }
+      const tools = Array.isArray(p.tools) ? [...p.tools] : []
+      const original = tools[index]
+      if (!original || original.mode === 'json') return p
+      const t = { ...original }
       const existing = parseParamsToFields(t.parameters || '')
       const next = existing.map((f, i) => (i === fieldIndex ? { ...f, ...patch } : f))
       t.parameters = fieldsToParamsString(next)
@@ -1469,8 +1616,10 @@ function App() {
 
   function removeParam(index, fieldIndex) {
     updateSelected(p => {
-      const tools = [...(p.tools || [])]
-      const t = { ...(tools[index] || {}) }
+      const tools = Array.isArray(p.tools) ? [...p.tools] : []
+      const original = tools[index]
+      if (!original || original.mode === 'json') return p
+      const t = { ...original }
       const existing = parseParamsToFields(t.parameters || '')
       existing.splice(fieldIndex, 1)
       t.parameters = fieldsToParamsString(existing)
@@ -1673,10 +1822,39 @@ function App() {
   }
 
   function mapToolsForOpenAI(p) {
-    const tools = (p.tools || []).filter(t => t && t.name && t.enabled !== false)
-    if (!tools.length) return undefined
+    const active = (p.tools || []).filter(t => t && t.enabled !== false)
+    if (!active.length) return undefined
     const mapped = []
-    for (const t of tools) {
+    for (const t of active) {
+      const mode = t?.mode || 'form'
+      if (mode === 'json') {
+        const raw = typeof t?.rawJson === 'string' ? t.rawJson.trim() : ''
+        if (!raw) continue
+        try {
+          const parsed = JSON.parse(raw)
+          if (parsed && typeof parsed === 'object') {
+            if (parsed.type) {
+              mapped.push(parsed)
+            } else if (parsed.name) {
+              const parameters = parsed && typeof parsed.parameters === 'object' ? parsed.parameters : {}
+              mapped.push({
+                type: 'function',
+                function: {
+                  name: parsed.name,
+                  description: parsed.description || '',
+                  parameters,
+                }
+              })
+            } else {
+              console.warn('Skipping JSON tool without type or name field')
+            }
+          }
+        } catch {
+          console.warn('Skipping invalid JSON tool payload')
+        }
+        continue
+      }
+      if (!t.name) continue
       let schema = {}
       try {
         schema = t.parameters ? JSON.parse(t.parameters) : {}
@@ -1693,7 +1871,7 @@ function App() {
         }
       })
     }
-    return mapped
+    return mapped.length ? mapped : undefined
   }
 
   async function callOpenAI(messages, tools) {
@@ -1706,7 +1884,54 @@ function App() {
         messages: messages
           .filter(m => m.role !== 'comment')
           .filter(m => m.enabled !== false)
-          .map(m => ({ role: m.role, content: m.content })),
+          .map((m, idx) => {
+            const baseMessage = {
+              role: m.role,
+              content: m.content != null ? m.content : '',
+            }
+            if (m.role === 'assistant') {
+              const rawCalls = Array.isArray(m.toolCalls) ? m.toolCalls : (Array.isArray(m.tool_calls) ? m.tool_calls : [])
+              const calls = rawCalls
+                .map((tc, callIndex) => {
+                  if (!tc) return null
+                  const name = tc.name || tc.function?.name || ''
+                  if (!name) return null
+                  const id = tc.id || tc.tool_call_id || `manual_tool_call_${idx}_${callIndex}`
+                  let args = tc.arguments
+                  if (tc.function && tc.function.arguments != null) {
+                    args = tc.function.arguments
+                  }
+                  if (args && typeof args !== 'string') {
+                    try {
+                      args = JSON.stringify(args)
+                    } catch {
+                      args = String(args)
+                    }
+                  }
+                  if (args == null) args = ''
+                  return {
+                    id,
+                    type: tc.type || 'function',
+                    function: {
+                      name,
+                      arguments: args,
+                    }
+                  }
+                })
+                .filter(Boolean)
+              if (calls.length) {
+                baseMessage.tool_calls = calls
+                if (baseMessage.content == null) baseMessage.content = ''
+              }
+            }
+            if (m.role === 'tool') {
+              if (m.toolCallId) baseMessage.tool_call_id = m.toolCallId
+              else if (m.tool_call_id) baseMessage.tool_call_id = m.tool_call_id
+              if (m.toolName) baseMessage.name = m.toolName
+              else if (m.name) baseMessage.name = m.name
+            }
+            return baseMessage
+          }),
       }
       if (tools) {
         payload.tools = tools
@@ -1800,46 +2025,48 @@ function App() {
     if (!selectedPrompt) return
     const msg = runMessages[indexInRun]
     if (!msg || msg.role !== 'assistant') return
-    let contentToSave = (msg.content || '').trim()
     const hasTools = Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0;
-    if (!contentToSave && hasTools) {
-      try {
-        const parts = msg.tool_calls.map(tc => {
-          const name = tc?.function?.name || 'unknown'
-          const args = tc?.function?.arguments || ''
-          let argsString = ''
-          try {
-            const parsed = args ? JSON.parse(args) : {}
-            if (Array.isArray(parsed)) {
-              parsed.forEach(arg => {
-                if (arg && typeof arg === 'object') {
-                  const n = Object.prototype.hasOwnProperty.call(arg, 'name') ? arg.name : 'value'
-                  const v = Object.prototype.hasOwnProperty.call(arg, 'value') ? arg.value : arg
-                  argsString += `_${n}:_ ${typeof v === 'object' ? JSON.stringify(v) : String(v)}\n`
-                } else {
-                  argsString += `_value:_ ${String(arg)}\n`
-                }
-              })
-            } else if (parsed && typeof parsed === 'object') {
-              Object.entries(parsed).forEach(([k, v]) => {
-                argsString += `_${k}:_ ${typeof v === 'object' ? JSON.stringify(v) : String(v)}\n`
-              })
-            } else if (parsed != null) {
-              argsString += String(parsed)
-            }
-          } catch {
-            argsString = String(args || '')
-          }
-          return `**Tool call:** ${name}\n**arguments:**\n${argsString}`
-        })
-        contentToSave = parts.join('\n\n')
-      } catch {
-        contentToSave = 'Tool call (details unavailable)'
+    if (hasTools) {
+      const normalizedCalls = msg.tool_calls.map((tc, idx) => normalizeToolCallForStorage(tc, `tool_call_${indexInRun}_${idx}`))
+      const assistantId = crypto.randomUUID()
+      const assistantContent = (msg.content || '').trim()
+      const assistantMessage = {
+        id: assistantId,
+        role: 'assistant',
+        content: assistantContent,
+        enabled: true,
+        toolCalls: normalizedCalls,
       }
+      const toolMessages = normalizedCalls.map(tc => {
+        let toolContent = ''
+        if (tc.arguments) {
+          try {
+            const parsedArgs = JSON.parse(tc.arguments)
+            toolContent = JSON.stringify(parsedArgs, null, 2)
+          } catch {
+            toolContent = tc.arguments
+          }
+        }
+        return {
+          id: crypto.randomUUID(),
+          role: 'tool',
+          content: '',
+          enabled: true,
+          toolCallId: tc.id,
+          toolName: tc.name || '',
+          label: tc.name || '',
+        }
+      })
+      updateSelected(p => ({ ...p, messages: [...p.messages, assistantMessage, ...toolMessages] }))
+      if (assistantContent) {
+        setPreviewByMessageId(prev => ({ ...prev, [assistantId]: 'Preview' }))
+      }
+      return
     }
+    const contentToSave = (msg.content || '').trim()
     if (!contentToSave) return
     const mId = crypto.randomUUID();
-    updateSelected(p => ({ ...p, messages: [...p.messages, { id: mId, role: hasTools ? 'comment' : 'assistant', prev: 'Preview', content: contentToSave }] }))
+    updateSelected(p => ({ ...p, messages: [...p.messages, { id: mId, role: 'assistant', prev: 'Preview', content: contentToSave }] }))
     setPreviewByMessageId(prev => ({ ...prev, [mId]: 'Preview' }))
   }
 

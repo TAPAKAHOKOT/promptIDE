@@ -194,6 +194,7 @@ const MessagesEditor = memo(function MessagesEditor({
                 <Button size="small" type="text" onClick={() => addMessage('system', 0)}>system</Button>
                 <Button size="small" type="text" onClick={() => addMessage('user', 0)}>user</Button>
                 <Button size="small" type="text" onClick={() => addMessage('assistant', 0)}>assistant</Button>
+                <Button size="small" type="text" onClick={() => addMessage('tool', 0)}>tool</Button>
                 <Button size="small" type="text" onClick={() => addMessage('comment', 0)}>comment</Button>
               </div>
             </div>
@@ -259,6 +260,7 @@ const MessagesEditor = memo(function MessagesEditor({
                           <Button style={{ color: 'var(--muted)' }} size="small" type="text" onClick={() => addMessage('system', index + 1)}>system</Button>
                           <Button style={{ color: 'var(--muted)' }} size="small" type="text" onClick={() => addMessage('user', index + 1)}>user</Button>
                           <Button style={{ color: 'var(--muted)' }} size="small" type="text" onClick={() => addMessage('assistant', index + 1)}>assistant</Button>
+                          <Button style={{ color: 'var(--muted)' }} size="small" type="text" onClick={() => addMessage('tool', index + 1)}>tool</Button>
                           <Button style={{ color: 'var(--muted)' }} size="small" type="text" onClick={() => addMessage('comment', index + 1)}>comment</Button>
                         </div>
                       </div>
@@ -295,6 +297,7 @@ const MessagesEditor = memo(function MessagesEditor({
         <Button size="small" onClick={() => addMessage('system')}>+ system</Button>
         <Button size="small" onClick={() => addMessage('user')}>+ user</Button>
         <Button size="small" onClick={() => addMessage('assistant')}>+ assistant</Button>
+        <Button size="small" onClick={() => addMessage('tool')}>+ tool</Button>
         <Button size="small" onClick={() => addMessage('comment')}>+ comment</Button>
       </div>
     </section>
