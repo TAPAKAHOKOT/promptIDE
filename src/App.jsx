@@ -750,6 +750,14 @@ function App() {
 
   // Predefined model options for Selects
   const presetModelOptions = useMemo(() => ([
+    { value: 'gpt-5.6', label: 'GPT 5.6 (Sol)' },
+    { value: 'gpt-5.6-sol', label: 'GPT 5.6 Sol' },
+    { value: 'gpt-5.6-terra', label: 'GPT 5.6 Terra' },
+    { value: 'gpt-5.6-luna', label: 'GPT 5.6 Luna' },
+    { value: 'gpt-5.5', label: 'GPT 5.5' },
+    { value: 'gpt-5.4', label: 'GPT 5.4' },
+    { value: 'gpt-5.4-mini', label: 'GPT 5.4 mini' },
+    { value: 'gpt-5.4-nano', label: 'GPT 5.4 nano' },
     { value: 'gpt-5', label: 'GPT 5' },
     { value: 'gpt-5-mini', label: 'GPT 5 mini' },
     { value: 'gpt-5-nano', label: 'GPT 5 nano' },
@@ -1670,6 +1678,14 @@ function App() {
       // Prices below are converted from per 1M tokens to per 1K tokens
       // input -> prompt, output -> completion, cached -> cached
       const HARDCODED_PRICING = {
+        'gpt-5.6': { prompt: 0.005, cached: 0.0005, completion: 0.030 },
+        'gpt-5.6-sol': { prompt: 0.005, cached: 0.0005, completion: 0.030 },
+        'gpt-5.6-terra': { prompt: 0.002, cached: 0.0002, completion: 0.012 },
+        'gpt-5.6-luna': { prompt: 0.0002, cached: 0.00002, completion: 0.0012 },
+        'gpt-5.5': { prompt: 0.005, cached: 0.0005, completion: 0.030 },
+        'gpt-5.4': { prompt: 0.0025, cached: 0.00025, completion: 0.015 },
+        'gpt-5.4-mini': { prompt: 0.00075, cached: 0.000075, completion: 0.0045 },
+        'gpt-5.4-nano': { prompt: 0.0002, cached: 0.00002, completion: 0.00125 },
         'gpt-5': { prompt: 0.00125, cached: 0.000125, completion: 0.010 },
         'gpt-5-mini': { prompt: 0.00025, cached: 0.000025, completion: 0.002 },
         'gpt-5-nano': { prompt: 0.00005, cached: 0.000005, completion: 0.0004 },
